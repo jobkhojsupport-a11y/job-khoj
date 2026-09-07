@@ -1,0 +1,7 @@
+{
+  "name": "JOB KHOJ - Indian Job Alert & Recruitment Portal",
+  "description": "Indian job-information and recruitment-update portal providing Government Jobs, Private Jobs, Bank Jobs, Railway Jobs, Defence Jobs, Teaching Jobs, Police Jobs, Exams, Results, and Admit Cards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
