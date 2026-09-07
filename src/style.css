@@ -2071,6 +2071,38 @@ button, input, select, textarea {
   gap: 12px;
 }
 
+
+.admin-modal > form {
+  overflow-y: auto;
+  padding: 24px;
+}
+.admin-modal > form .admin-form-group {
+  margin-bottom: 16px;
+}
+@media (max-width: 760px) {
+  .admin-actions-cell {
+    flex-wrap: wrap;
+    min-width: 250px;
+  }
+  .admin-table-container {
+    overflow-x: auto;
+  }
+  .admin-table {
+    min-width: 760px;
+  }
+  .admin-modal-overlay {
+    padding: 12px;
+    align-items: flex-start;
+  }
+  .admin-modal {
+    max-height: 94vh;
+    margin-top: 12px;
+  }
+  .admin-modal > form {
+    padding: 18px;
+  }
+}
+
 /* Responsive grid for admin forms */
 .admin-form-row {
   display: grid;

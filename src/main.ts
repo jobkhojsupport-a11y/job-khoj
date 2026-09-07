@@ -1683,7 +1683,7 @@ class JobKhojApp {
             <div class="admin-nav-item ${activeTab === 'exams' ? 'active' : ''}" data-tab="exams">
               <div class="admin-nav-item-left">
                 ${Icons.award}
-                <span>Competitive Exams</span>
+                <span>Manage Exams</span>
               </div>
               <span class="admin-item-count">${exams.length}</span>
             </div>
@@ -1691,7 +1691,7 @@ class JobKhojApp {
             <div class="admin-nav-item ${activeTab === 'results' ? 'active' : ''}" data-tab="results">
               <div class="admin-nav-item-left">
                 ${Icons.file}
-                <span>Results Announcements</span>
+                <span>Manage Results</span>
               </div>
               <span class="admin-item-count">${results.length}</span>
             </div>
@@ -1699,7 +1699,7 @@ class JobKhojApp {
             <div class="admin-nav-item ${activeTab === 'admit-cards' ? 'active' : ''}" data-tab="admit-cards">
               <div class="admin-nav-item-left">
                 ${Icons.calendar}
-                <span>Admit Cards</span>
+                <span>Manage Admit Cards</span>
               </div>
               <span class="admin-item-count">${admitCards.length}</span>
             </div>
@@ -2295,382 +2295,183 @@ class JobKhojApp {
         <div class="admin-view-header">
           <div>
             <h1 class="admin-heading">Manage Competitive Exams</h1>
-            <p class="admin-subheading">National and state entrance and commission exams</p>
+            <p class="admin-subheading">Total ${exams.length} competitive exam notifications in database</p>
           </div>
-          <button class="btn-admin-action-primary" id="admin-add-exam-btn">
-            ${Icons.plus}
-            <span>+ ADD EXAM</span>
-          </button>
+          <button class="btn-admin-action-primary" id="admin-add-exam-btn">${Icons.plus}<span>+ CREATE NEW EXAM</span></button>
         </div>
-
         <div class="admin-table-container">
           <table class="admin-table">
-            <thead>
-              <tr>
-                <th>EXAM NAME</th>
-                <th>ORGANIZATION</th>
-                <th>EXAM DATE</th>
-                <th>LAST DATE</th>
-                <th>ACTIONS</th>
-              </tr>
-            </thead>
+            <thead><tr>
+              <th>EXAM NAME & ORG</th><th>EXAM DATE</th><th>LAST DATE</th><th>STATUS</th><th>ACTIONS</th>
+            </tr></thead>
             <tbody>
-              ${exams.length > 0 ? exams.map(ex => `
+              ${exams.length ? exams.map(ex => `
                 <tr>
-                  <td><div class="admin-table-title">${ex.examName}</div></td>
-                  <td>${ex.org}</td>
-                  <td><strong style="color:var(--orange);">${ex.examDate}</strong></td>
-                  <td>${ex.lastDate}</td>
-                  <td>
-                    <div class="admin-actions-cell">
-                      <button class="btn-table-action exam-toggle-btn" data-id="${ex.id}">
-                        ${ex.published ? 'Unpublish' : 'Publish'}
-                      </button>
-                      <button class="btn-table-action btn-table-delete exam-delete-btn" data-id="${ex.id}">Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              `).join('') : `
-                <tr>
-                  <td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">
-                    No competitive exam notices added yet. Click <strong>+ ADD EXAM</strong> to add an upcoming exam.
-                  </td>
-                </tr>
-              `}
+                  <td><div class="admin-table-title">${this.escapeHtml(ex.examName)}</div><div class="admin-table-sub">${this.escapeHtml(ex.org)}</div></td>
+                  <td><strong>${this.escapeHtml(ex.examDate)}</strong></td>
+                  <td>${this.escapeHtml(ex.lastDate)}</td>
+                  <td><span class="job-status-badge ${ex.published ? 'status-active' : 'status-expired'}">${ex.published ? 'PUBLISHED' : 'DRAFT'}</span></td>
+                  <td><div class="admin-actions-cell">
+                    <button class="btn-table-action exam-edit-btn" data-id="${ex.id}">Edit</button>
+                    <button class="btn-table-action exam-duplicate-btn" data-id="${ex.id}">Duplicate</button>
+                    <button class="btn-table-action exam-toggle-btn" data-id="${ex.id}">${ex.published ? 'Unpublish' : 'Publish'}</button>
+                    <button class="btn-table-action btn-table-delete exam-delete-btn" data-id="${ex.id}">Delete</button>
+                  </div></td>
+                </tr>`).join('') : `
+                <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No competitive exams created yet. Click <strong>+ CREATE NEW EXAM</strong> to add one.</td></tr>`}
             </tbody>
           </table>
         </div>
-      </div>
-    `;
+      </div>`;
 
-    document.getElementById('admin-add-exam-btn')?.addEventListener('click', () => {
-      const name = prompt('Enter Exam Name:');
-      if (!name) return;
-      const org = prompt('Enter Conducting Organization:') || 'National Commission';
-      const examDate = prompt('Enter Tentative Exam Date (e.g. 15 Jul 2026):') || 'July 2026';
-      const lastDate = prompt('Enter Application Last Date (e.g. 20 May 2026):') || 'May 2026';
+    document.getElementById('admin-add-exam-btn')?.addEventListener('click', () => this.openExamModal(null));
+    document.querySelectorAll('.exam-edit-btn').forEach(btn => btn.addEventListener('click', () => {
+      const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (item) this.openExamModal(item);
+    }));
+    document.querySelectorAll('.exam-duplicate-btn').forEach(btn => btn.addEventListener('click', () => {
+      const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (!item) return;
+      exams.unshift({...item, id:'ex-'+Date.now(), examName:`${item.examName} (Copy)`, published:false});
+      JobKhojDataStore.saveExams(exams); this.showToast('Exam duplicated as draft'); this.renderAdminExams(container);
+    }));
+    document.querySelectorAll('.exam-toggle-btn').forEach(btn => btn.addEventListener('click', () => {
+      const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (!item) return;
+      item.published=!item.published; JobKhojDataStore.saveExams(exams);
+      this.showToast(`Exam ${item.published ? 'published' : 'unpublished'}`); this.renderAdminExams(container);
+    }));
+    document.querySelectorAll('.exam-delete-btn').forEach(btn => btn.addEventListener('click', () => {
+      if (!confirm('Are you sure you want to delete this competitive exam?')) return;
+      JobKhojDataStore.saveExams(exams.filter(x => x.id !== btn.getAttribute('data-id')));
+      this.showToast('Exam deleted'); this.renderAdminExams(container);
+    }));
+  }
 
-      const newExam: ExamItem = {
-        id: 'ex-' + Date.now(),
-        examName: name,
-        org,
-        examDate,
-        lastDate,
-        details: 'National level competitive examination for recruitment.',
-        eligibility: 'Graduate in any discipline',
-        officialUrl: 'https://gov.in',
-        published: true
-      };
-      exams.unshift(newExam);
-      JobKhojDataStore.saveExams(exams);
-      this.showToast('New exam added to database');
-      this.renderAdminExams(container);
-    });
-
-    document.querySelectorAll('.exam-toggle-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        const item = exams.find(e => e.id === id);
-        if (item) {
-          item.published = !item.published;
-          JobKhojDataStore.saveExams(exams);
-          this.showToast(`Exam ${item.published ? 'published' : 'unpublished'}`);
-          this.renderAdminExams(container);
-        }
-      });
-    });
-
-    document.querySelectorAll('.exam-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        if (confirm('Delete this competitive exam?')) {
-          const updated = exams.filter(e => e.id !== id);
-          JobKhojDataStore.saveExams(updated);
-          this.showToast('Exam deleted');
-          this.renderAdminExams(container);
-        }
-      });
-    });
+  private openExamModal(existing: ExamItem | null): void {
+    const root=document.getElementById('admin-modal-root'); if(!root) return;
+    root.innerHTML=`<div class="admin-modal-overlay" id="content-modal-overlay"><div class="admin-modal" style="max-width:760px;">
+      <div class="admin-modal-header"><div><h2 class="admin-modal-title">${existing?'Edit Competitive Exam':'Create Competitive Exam'}</h2><p class="admin-subheading">Manage exam details just like a job recruitment.</p></div><button class="admin-modal-close" id="content-modal-close">×</button></div>
+      <form id="content-modal-form">
+        <div class="admin-form-section-title">Exam Information</div>
+        <div class="admin-form-group"><label class="admin-form-label">Exam Name *</label><input id="cm-name" class="admin-form-input" required value="${this.escapeHtml(existing?.examName||'')}"></div>
+        <div class="admin-form-group"><label class="admin-form-label">Conducting Organization *</label><input id="cm-org" class="admin-form-input" required value="${this.escapeHtml(existing?.org||'')}"></div>
+        <div class="admin-form-group"><label class="admin-form-label">Exam Date</label><input id="cm-exam-date" class="admin-form-input" value="${this.escapeHtml(existing?.examDate||'')}"></div>
+        <div class="admin-form-group"><label class="admin-form-label">Application Last Date</label><input id="cm-last-date" class="admin-form-input" value="${this.escapeHtml(existing?.lastDate||'')}"></div>
+        <div class="admin-form-group"><label class="admin-form-label">Eligibility</label><input id="cm-eligibility" class="admin-form-input" value="${this.escapeHtml(existing?.eligibility||'')}"></div>
+        <div class="admin-form-group"><label class="admin-form-label">Details</label><textarea id="cm-details" class="admin-form-textarea" rows="4">${this.escapeHtml(existing?.details||'')}</textarea></div>
+        <div class="admin-form-group"><label class="admin-form-label">Official Exam URL</label><input id="cm-url" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.officialUrl||'')}"></div>
+        <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH EXAM</button></div>
+      </form></div></div>`;
+    root.querySelector('#content-modal-overlay')?.classList.add('open');
+    const close=()=>root.innerHTML=''; document.getElementById('content-modal-close')?.addEventListener('click',close); document.getElementById('content-modal-cancel')?.addEventListener('click',close);
+    const save=(published:boolean)=>{
+      const name=(document.getElementById('cm-name') as HTMLInputElement).value.trim(), org=(document.getElementById('cm-org') as HTMLInputElement).value.trim();
+      if(!name||!org){alert('Please fill in Exam Name and Organization.');return;}
+      const item:ExamItem={id:existing?.id||'ex-'+Date.now(),examName:name,org,
+        examDate:(document.getElementById('cm-exam-date') as HTMLInputElement).value.trim()||'To be announced',
+        lastDate:(document.getElementById('cm-last-date') as HTMLInputElement).value.trim()||'To be announced',
+        eligibility:(document.getElementById('cm-eligibility') as HTMLInputElement).value.trim(),
+        details:(document.getElementById('cm-details') as HTMLTextAreaElement).value.trim(),
+        officialUrl:(document.getElementById('cm-url') as HTMLInputElement).value.trim(),published};
+      const all=JobKhojDataStore.getExams(); const i=all.findIndex(x=>x.id===item.id); if(i>=0) all[i]=item; else all.unshift(item);
+      JobKhojDataStore.saveExams(all); close(); this.showToast(`Exam ${published?'published':'saved as draft'}`);
+      const main=document.getElementById('admin-main-view'); if(main) this.renderAdminExams(main);
+    };
+    document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));
+    document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
   // 4. Results Admin Sub-view
   private renderAdminResults(container: HTMLElement): void {
     const results = JobKhojDataStore.getResults();
+    container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Results Announcements</h1><p class="admin-subheading">Total ${results.length} result announcements in database</p></div><button class="btn-admin-action-primary" id="admin-add-result-btn">${Icons.plus}<span>+ CREATE NEW RESULT</span></button></div>
+      <div class="admin-table-container"><table class="admin-table"><thead><tr><th>RESULT TITLE & ORG</th><th>EXAM</th><th>RESULT DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
+      ${results.length?results.map(r=>`<tr><td><div class="admin-table-title">${this.escapeHtml(r.resultTitle)}</div><div class="admin-table-sub">${this.escapeHtml(r.org)}</div></td><td>${this.escapeHtml(r.exam)}</td><td>${this.escapeHtml(r.resultDate)}</td><td><span class="job-status-badge ${r.published?'status-active':'status-expired'}">${r.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action result-edit-btn" data-id="${r.id}">Edit</button><button class="btn-table-action result-duplicate-btn" data-id="${r.id}">Duplicate</button><button class="btn-table-action result-toggle-btn" data-id="${r.id}">${r.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete result-delete-btn" data-id="${r.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No result announcements created yet. Click <strong>+ CREATE NEW RESULT</strong> to add one.</td></tr>`}
+      </tbody></table></div></div>`;
+    document.getElementById('admin-add-result-btn')?.addEventListener('click',()=>this.openResultModal(null));
+    document.querySelectorAll('.result-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(x)this.openResultModal(x);}));
+    document.querySelectorAll('.result-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;results.unshift({...x,id:'res-'+Date.now(),resultTitle:`${x.resultTitle} (Copy)`,published:false});JobKhojDataStore.saveResults(results);this.showToast('Result duplicated as draft');this.renderAdminResults(container);}));
+    document.querySelectorAll('.result-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveResults(results);this.showToast(`Result ${x.published?'published':'unpublished'}`);this.renderAdminResults(container);}));
+    document.querySelectorAll('.result-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this result announcement?'))return;JobKhojDataStore.saveResults(results.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Result deleted');this.renderAdminResults(container);}));
+  }
 
-    container.innerHTML = `
-      <div>
-        <div class="admin-view-header">
-          <div>
-            <h1 class="admin-heading">Manage Results Announcements</h1>
-            <p class="admin-subheading">Total ${results.length} result notifications published</p>
-          </div>
-          <button class="btn-admin-action-primary" id="admin-add-result-btn">
-            ${Icons.plus}
-            <span>+ ADD RESULT</span>
-          </button>
-        </div>
-
-        <div class="admin-table-container">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>RESULT TITLE</th>
-                <th>ORGANIZATION</th>
-                <th>EXAM</th>
-                <th>RESULT DATE</th>
-                <th>ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${results.length > 0 ? results.map(r => `
-                <tr>
-                  <td><div class="admin-table-title">${r.resultTitle}</div></td>
-                  <td>${r.org}</td>
-                  <td>${r.exam}</td>
-                  <td>${r.resultDate}</td>
-                  <td>
-                    <div class="admin-actions-cell">
-                      <button class="btn-table-action btn-table-delete result-delete-btn" data-id="${r.id}">Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              `).join('') : `
-                <tr>
-                  <td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">
-                    No result announcements added yet. Click <strong>+ ADD RESULT</strong> to declare a result.
-                  </td>
-                </tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-
-    document.getElementById('admin-add-result-btn')?.addEventListener('click', () => {
-      const title = prompt('Enter Result Title:');
-      if (!title) return;
-      const org = prompt('Enter Organization:') || 'Staff Selection Commission';
-      const exam = prompt('Enter Exam Name:') || 'Combined Exam';
-      const resDate = prompt('Enter Result Date (e.g. 05 Mar 2026):') || 'March 2026';
-      const url = prompt('Enter Official Result URL:') || 'https://gov.in';
-
-      const item: ResultItem = {
-        id: 'res-' + Date.now(),
-        resultTitle: title,
-        org,
-        exam,
-        resultDate: resDate,
-        description: 'Merit list and category-wise cut-off marks published officially.',
-        resultUrl: url,
-        officialWebsite: 'https://gov.in',
-        published: true,
-        featured: true
-      };
-      results.unshift(item);
-      JobKhojDataStore.saveResults(results);
-      this.showToast('Result declared and published');
-      this.renderAdminResults(container);
-    });
-
-    document.querySelectorAll('.result-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        if (confirm('Delete this result announcement?')) {
-          const updated = results.filter(r => r.id !== id);
-          JobKhojDataStore.saveResults(updated);
-          this.showToast('Result deleted');
-          this.renderAdminResults(container);
-        }
-      });
-    });
+  private openResultModal(existing: ResultItem | null): void {
+    const root=document.getElementById('admin-modal-root');if(!root)return;
+    root.innerHTML=`<div class="admin-modal-overlay" id="content-modal-overlay"><div class="admin-modal" style="max-width:760px;"><div class="admin-modal-header"><div><h2 class="admin-modal-title">${existing?'Edit Result Announcement':'Create Result Announcement'}</h2><p class="admin-subheading">Create, edit, publish or save a result as draft.</p></div><button class="admin-modal-close" id="content-modal-close">×</button></div><form id="content-modal-form">
+      <div class="admin-form-section-title">Result Information</div><div class="admin-form-group"><label class="admin-form-label">Result Title *</label><input id="rm-title" class="admin-form-input" required value="${this.escapeHtml(existing?.resultTitle||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Organization *</label><input id="rm-org" class="admin-form-input" required value="${this.escapeHtml(existing?.org||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Exam Name</label><input id="rm-exam" class="admin-form-input" value="${this.escapeHtml(existing?.exam||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Result Date</label><input id="rm-date" class="admin-form-input" value="${this.escapeHtml(existing?.resultDate||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Description</label><textarea id="rm-desc" class="admin-form-textarea" rows="4">${this.escapeHtml(existing?.description||'')}</textarea></div>
+      <div class="admin-form-group"><label class="admin-form-label">Official Result URL</label><input id="rm-url" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.resultUrl||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Official Website</label><input id="rm-web" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.officialWebsite||'')}"></div>
+      <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH RESULT</button></div></form></div></div>`;
+    root.querySelector('#content-modal-overlay')?.classList.add('open');
+    const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
+    const save=(published:boolean)=>{const title=(document.getElementById('rm-title')as HTMLInputElement).value.trim(),org=(document.getElementById('rm-org')as HTMLInputElement).value.trim();if(!title||!org){alert('Please fill in Result Title and Organization.');return;}const item:ResultItem={id:existing?.id||'res-'+Date.now(),resultTitle:title,org,exam:(document.getElementById('rm-exam')as HTMLInputElement).value.trim(),resultDate:(document.getElementById('rm-date')as HTMLInputElement).value.trim()||'Today',description:(document.getElementById('rm-desc')as HTMLTextAreaElement).value.trim(),resultUrl:(document.getElementById('rm-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('rm-web')as HTMLInputElement).value.trim(),published,featured:existing?.featured??false};const all=JobKhojDataStore.getResults(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveResults(all);close();this.showToast(`Result ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminResults(main);};
+    document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
   // 5. Admit Cards Admin Sub-view
   private renderAdminAdmitCards(container: HTMLElement): void {
-    const cards = JobKhojDataStore.getAdmitCards();
+    const cards=JobKhojDataStore.getAdmitCards();
+    container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Admit Cards</h1><p class="admin-subheading">Total ${cards.length} admit card notifications in database</p></div><button class="btn-admin-action-primary" id="admin-add-admit-btn">${Icons.plus}<span>+ CREATE NEW ADMIT CARD</span></button></div>
+      <div class="admin-table-container"><table class="admin-table"><thead><tr><th>EXAM NAME & ORG</th><th>RELEASE DATE</th><th>EXAM DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
+      ${cards.length?cards.map(c=>`<tr><td><div class="admin-table-title">${this.escapeHtml(c.examName)}</div><div class="admin-table-sub">${this.escapeHtml(c.org)}</div></td><td>${this.escapeHtml(c.releaseDate)}</td><td><strong>${this.escapeHtml(c.examDate)}</strong></td><td><span class="job-status-badge ${c.published?'status-active':'status-expired'}">${c.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action admit-edit-btn" data-id="${c.id}">Edit</button><button class="btn-table-action admit-duplicate-btn" data-id="${c.id}">Duplicate</button><button class="btn-table-action admit-toggle-btn" data-id="${c.id}">${c.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete admit-delete-btn" data-id="${c.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No admit cards created yet. Click <strong>+ CREATE NEW ADMIT CARD</strong> to add one.</td></tr>`}
+      </tbody></table></div></div>`;
+    document.getElementById('admin-add-admit-btn')?.addEventListener('click',()=>this.openAdmitModal(null));
+    document.querySelectorAll('.admit-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(x)this.openAdmitModal(x);}));
+    document.querySelectorAll('.admit-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;cards.unshift({...x,id:'ac-'+Date.now(),examName:`${x.examName} (Copy)`,published:false});JobKhojDataStore.saveAdmitCards(cards);this.showToast('Admit card duplicated as draft');this.renderAdminAdmitCards(container);}));
+    document.querySelectorAll('.admit-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveAdmitCards(cards);this.showToast(`Admit card ${x.published?'published':'unpublished'}`);this.renderAdminAdmitCards(container);}));
+    document.querySelectorAll('.admit-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this admit card?'))return;JobKhojDataStore.saveAdmitCards(cards.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Admit card deleted');this.renderAdminAdmitCards(container);}));
+  }
 
-    container.innerHTML = `
-      <div>
-        <div class="admin-view-header">
-          <div>
-            <h1 class="admin-heading">Manage Admit Cards</h1>
-            <p class="admin-subheading">Total ${cards.length} admit cards in release cycle</p>
-          </div>
-          <button class="btn-admin-action-primary" id="admin-add-admit-btn">
-            ${Icons.plus}
-            <span>+ ADD ADMIT CARD</span>
-          </button>
-        </div>
-
-        <div class="admin-table-container">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>EXAM NAME</th>
-                <th>ORGANIZATION</th>
-                <th>RELEASE DATE</th>
-                <th>EXAM DATE</th>
-                <th>ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${cards.length > 0 ? cards.map(c => `
-                <tr>
-                  <td><div class="admin-table-title">${c.examName}</div></td>
-                  <td>${c.org}</td>
-                  <td>${c.releaseDate}</td>
-                  <td><strong style="color:var(--orange);">${c.examDate}</strong></td>
-                  <td>
-                    <div class="admin-actions-cell">
-                      <button class="btn-table-action btn-table-delete admit-delete-btn" data-id="${c.id}">Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              `).join('') : `
-                <tr>
-                  <td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">
-                    No admit cards in release cycle. Click <strong>+ ADD ADMIT CARD</strong> to post hall ticket alerts.
-                  </td>
-                </tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-
-    document.getElementById('admin-add-admit-btn')?.addEventListener('click', () => {
-      const name = prompt('Enter Exam Name for Admit Card:');
-      if (!name) return;
-      const org = prompt('Enter Organization:') || 'Railway Recruitment Board';
-      const relDate = prompt('Release Date:') || 'March 2026';
-      const examDate = prompt('Scheduled Exam Date:') || 'April 2026';
-      const url = prompt('Download Link:') || 'https://gov.in';
-
-      const item: AdmitCardItem = {
-        id: 'ac-' + Date.now(),
-        examName: name,
-        org,
-        releaseDate: relDate,
-        examDate,
-        downloadUrl: url,
-        officialWebsite: 'https://gov.in',
-        description: 'Download online hall tickets using registration ID and birth date.',
-        published: true
-      };
-      cards.unshift(item);
-      JobKhojDataStore.saveAdmitCards(cards);
-      this.showToast('Admit Card notice published');
-      this.renderAdminAdmitCards(container);
-    });
-
-    document.querySelectorAll('.admit-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        if (confirm('Delete this admit card record?')) {
-          const updated = cards.filter(c => c.id !== id);
-          JobKhojDataStore.saveAdmitCards(updated);
-          this.showToast('Admit card deleted');
-          this.renderAdminAdmitCards(container);
-        }
-      });
-    });
+  private openAdmitModal(existing: AdmitCardItem | null): void {
+    const root=document.getElementById('admin-modal-root');if(!root)return;
+    root.innerHTML=`<div class="admin-modal-overlay" id="content-modal-overlay"><div class="admin-modal" style="max-width:760px;"><div class="admin-modal-header"><div><h2 class="admin-modal-title">${existing?'Edit Admit Card':'Create Admit Card'}</h2><p class="admin-subheading">Manage hall-ticket notifications like job recruitments.</p></div><button class="admin-modal-close" id="content-modal-close">×</button></div><form id="content-modal-form">
+      <div class="admin-form-section-title">Admit Card Information</div><div class="admin-form-group"><label class="admin-form-label">Exam Name *</label><input id="am-name" class="admin-form-input" required value="${this.escapeHtml(existing?.examName||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Organization *</label><input id="am-org" class="admin-form-input" required value="${this.escapeHtml(existing?.org||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Release Date</label><input id="am-release" class="admin-form-input" value="${this.escapeHtml(existing?.releaseDate||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Exam Date</label><input id="am-exam" class="admin-form-input" value="${this.escapeHtml(existing?.examDate||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Download URL</label><input id="am-url" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.downloadUrl||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Official Website</label><input id="am-web" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.officialWebsite||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Description</label><textarea id="am-desc" class="admin-form-textarea" rows="4">${this.escapeHtml(existing?.description||'')}</textarea></div>
+      <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH ADMIT CARD</button></div></form></div></div>`;
+    root.querySelector('#content-modal-overlay')?.classList.add('open');
+    const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
+    const save=(published:boolean)=>{const name=(document.getElementById('am-name')as HTMLInputElement).value.trim(),org=(document.getElementById('am-org')as HTMLInputElement).value.trim();if(!name||!org){alert('Please fill in Exam Name and Organization.');return;}const item:AdmitCardItem={id:existing?.id||'ac-'+Date.now(),examName:name,org,releaseDate:(document.getElementById('am-release')as HTMLInputElement).value.trim()||'To be announced',examDate:(document.getElementById('am-exam')as HTMLInputElement).value.trim()||'To be announced',downloadUrl:(document.getElementById('am-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('am-web')as HTMLInputElement).value.trim(),description:(document.getElementById('am-desc')as HTMLTextAreaElement).value.trim(),published};const all=JobKhojDataStore.getAdmitCards(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveAdmitCards(all);close();this.showToast(`Admit card ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminAdmitCards(main);};
+    document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
   // 6. Manage Blog Admin Sub-view
   private renderAdminBlog(container: HTMLElement): void {
-    const articles = JobKhojDataStore.getBlog();
+    const articles=JobKhojDataStore.getBlog();
+    container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Blog Articles</h1><p class="admin-subheading">Total ${articles.length} blog articles in database</p></div><button class="btn-admin-action-primary" id="admin-add-article-btn">${Icons.plus}<span>+ CREATE NEW ARTICLE</span></button></div>
+      <div class="admin-table-container"><table class="admin-table"><thead><tr><th>TITLE & CATEGORY</th><th>AUTHOR</th><th>DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
+      ${articles.length?articles.map(a=>`<tr><td><div class="admin-table-title">${this.escapeHtml(a.title)}</div><div class="admin-table-sub">${this.escapeHtml(a.category)}</div></td><td>${this.escapeHtml(a.author)}</td><td>${this.escapeHtml(a.publishedDate)}</td><td><span class="job-status-badge ${a.published?'status-active':'status-expired'}">${a.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action blog-edit-btn" data-id="${a.id}">Edit</button><button class="btn-table-action blog-duplicate-btn" data-id="${a.id}">Duplicate</button><button class="btn-table-action blog-toggle-btn" data-id="${a.id}">${a.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete blog-delete-btn" data-id="${a.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No blog articles created yet. Click <strong>+ CREATE NEW ARTICLE</strong> to add one.</td></tr>`}
+      </tbody></table></div></div>`;
+    document.getElementById('admin-add-article-btn')?.addEventListener('click',()=>this.openBlogModal(null));
+    document.querySelectorAll('.blog-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(x)this.openBlogModal(x);}));
+    document.querySelectorAll('.blog-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;articles.unshift({...x,id:'bl-'+Date.now(),title:`${x.title} (Copy)`,slug:`${x.slug}-copy`,published:false});JobKhojDataStore.saveBlog(articles);this.showToast('Article duplicated as draft');this.renderAdminBlog(container);}));
+    document.querySelectorAll('.blog-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveBlog(articles);this.showToast(`Article ${x.published?'published':'unpublished'}`);this.renderAdminBlog(container);}));
+    document.querySelectorAll('.blog-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this article?'))return;JobKhojDataStore.saveBlog(articles.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Article deleted');this.renderAdminBlog(container);}));
+  }
 
-    container.innerHTML = `
-      <div>
-        <div class="admin-view-header">
-          <div>
-            <h1 class="admin-heading">Manage Blog & Career Articles</h1>
-            <p class="admin-subheading">Total ${articles.length} guidance articles published</p>
-          </div>
-          <button class="btn-admin-action-primary" id="admin-add-article-btn">
-            ${Icons.plus}
-            <span>+ CREATE ARTICLE</span>
-          </button>
-        </div>
-
-        <div class="admin-table-container">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>TITLE</th>
-                <th>CATEGORY</th>
-                <th>AUTHOR</th>
-                <th>DATE</th>
-                <th>ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${articles.length > 0 ? articles.map(art => `
-                <tr>
-                  <td><div class="admin-table-title">${art.title}</div></td>
-                  <td><span class="job-category-badge" style="background:#E8FAF1;color:#20C76A;">${art.category}</span></td>
-                  <td>${art.author}</td>
-                  <td>${art.publishedDate}</td>
-                  <td>
-                    <div class="admin-actions-cell">
-                      <button class="btn-table-action btn-table-delete blog-delete-btn" data-id="${art.id}">Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              `).join('') : `
-                <tr>
-                  <td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">
-                    No articles written yet. Click <strong>+ CREATE ARTICLE</strong> to publish career guidance.
-                  </td>
-                </tr>
-              `}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    `;
-
-    document.getElementById('admin-add-article-btn')?.addEventListener('click', () => {
-      const title = prompt('Enter Article Title:');
-      if (!title) return;
-      const category = prompt('Category (e.g. Career Guidance, Exam Preparation):') || 'Career Guidance';
-      const excerpt = prompt('Short Excerpt:') || 'Preparation tips and guidelines for competitive exams.';
-      const content = prompt('Article Content (Text/Markdown):') || 'Full study guide and preparation breakdown for Indian exams.';
-
-      const item: BlogItem = {
-        id: 'bl-' + Date.now(),
-        title,
-        slug: title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
-        category,
-        featuredImage: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&auto=format&fit=crop&q=80',
-        excerpt,
-        content,
-        author: 'Job Khoj Editorial Team',
-        publishedDate: `${new Date().getDate()} ${new Date().toLocaleString('default', { month: 'short' })} ${new Date().getFullYear()}`,
-        seoTitle: `${title} | JOB KHOJ`,
-        seoDescription: excerpt,
-        keywords: 'recruitment, syllabus, strategy',
-        published: true
-      };
-      articles.unshift(item);
-      JobKhojDataStore.saveBlog(articles);
-      this.showToast('Article created and published');
-      this.renderAdminBlog(container);
-    });
-
-    document.querySelectorAll('.blog-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = btn.getAttribute('data-id');
-        if (confirm('Delete this article?')) {
-          const updated = articles.filter(a => a.id !== id);
-          JobKhojDataStore.saveBlog(updated);
-          this.showToast('Article deleted');
-          this.renderAdminBlog(container);
-        }
-      });
-    });
+  private openBlogModal(existing: BlogItem | null): void {
+    const root=document.getElementById('admin-modal-root');if(!root)return;
+    root.innerHTML=`<div class="admin-modal-overlay" id="content-modal-overlay"><div class="admin-modal" style="max-width:820px;"><div class="admin-modal-header"><div><h2 class="admin-modal-title">${existing?'Edit Blog Article':'Create Blog Article'}</h2><p class="admin-subheading">Full editor with draft and publish workflow.</p></div><button class="admin-modal-close" id="content-modal-close">×</button></div><form id="content-modal-form">
+      <div class="admin-form-section-title">Article Information</div><div class="admin-form-group"><label class="admin-form-label">Article Title *</label><input id="bm-title" class="admin-form-input" required value="${this.escapeHtml(existing?.title||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Category</label><input id="bm-category" class="admin-form-input" value="${this.escapeHtml(existing?.category||'Career Guidance')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Author</label><input id="bm-author" class="admin-form-input" value="${this.escapeHtml(existing?.author||'Job Khoj Editorial Team')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Featured Image URL</label><input id="bm-image" type="url" class="admin-form-input" value="${this.escapeHtml(existing?.featuredImage||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">Short Excerpt</label><textarea id="bm-excerpt" class="admin-form-textarea" rows="3">${this.escapeHtml(existing?.excerpt||'')}</textarea></div>
+      <div class="admin-form-group"><label class="admin-form-label">Article Content *</label><textarea id="bm-content" class="admin-form-textarea" rows="9" required>${this.escapeHtml(existing?.content||'')}</textarea></div>
+      <div class="admin-form-section-title">SEO</div><div class="admin-form-group"><label class="admin-form-label">SEO Title</label><input id="bm-seo-title" class="admin-form-input" value="${this.escapeHtml(existing?.seoTitle||'')}"></div>
+      <div class="admin-form-group"><label class="admin-form-label">SEO Description</label><textarea id="bm-seo-desc" class="admin-form-textarea" rows="3">${this.escapeHtml(existing?.seoDescription||'')}</textarea></div>
+      <div class="admin-form-group"><label class="admin-form-label">Keywords</label><input id="bm-keywords" class="admin-form-input" value="${this.escapeHtml(existing?.keywords||'')}"></div>
+      <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH ARTICLE</button></div></form></div></div>`;
+    root.querySelector('#content-modal-overlay')?.classList.add('open');
+    const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
+    const save=(published:boolean)=>{const title=(document.getElementById('bm-title')as HTMLInputElement).value.trim(),content=(document.getElementById('bm-content')as HTMLTextAreaElement).value.trim();if(!title||!content){alert('Please fill in Article Title and Article Content.');return;}const slug=existing?.slug||title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');const item:BlogItem={id:existing?.id||'bl-'+Date.now(),title,slug,category:(document.getElementById('bm-category')as HTMLInputElement).value.trim()||'Career Guidance',featuredImage:(document.getElementById('bm-image')as HTMLInputElement).value.trim(),excerpt:(document.getElementById('bm-excerpt')as HTMLTextAreaElement).value.trim(),content,author:(document.getElementById('bm-author')as HTMLInputElement).value.trim()||'Job Khoj Editorial Team',publishedDate:existing?.publishedDate||`${new Date().getDate()} ${new Date().toLocaleString('default',{month:'short'})} ${new Date().getFullYear()}`,seoTitle:(document.getElementById('bm-seo-title')as HTMLInputElement).value.trim()||`${title} | JOB KHOJ`,seoDescription:(document.getElementById('bm-seo-desc')as HTMLTextAreaElement).value.trim(),keywords:(document.getElementById('bm-keywords')as HTMLInputElement).value.trim(),published};const all=JobKhojDataStore.getBlog(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveBlog(all);close();this.showToast(`Article ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminBlog(main);};
+    document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
   // 7. Advertisements (7 Slots) Admin Sub-view
