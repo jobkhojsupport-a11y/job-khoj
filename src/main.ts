@@ -51,21 +51,33 @@ class JobKhojApp {
 
   private async verifyAdminSession(): Promise<boolean> {
     try {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) {
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
+
+      if (userError || !userData.user) {
         JobKhojDataStore.setAdminLoggedIn(false);
         return false;
       }
-      const { data: adminUser, error: adminError } = await supabase
-        .from('admin_users')
-        .select('user_id, role')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      const authorised = !adminError && !!adminUser;
-      JobKhojDataStore.setAdminLoggedIn(authorised, adminUser?.role);
-      if (authorised) { try { await JobKhojDataStore.expireJobs(); } catch (e) { console.warn('Automatic expiry skipped', e); } }
-      if (!authorised) await supabase.auth.signOut();
-      return authorised;
+
+      const { data: isAdmin, error: adminError } =
+        await supabase.rpc('is_admin');
+
+      if (adminError || isAdmin !== true) {
+        console.error('Admin session authorization failed:', adminError);
+        JobKhojDataStore.setAdminLoggedIn(false);
+        await supabase.auth.signOut();
+        return false;
+      }
+
+      JobKhojDataStore.setAdminLoggedIn(true, 'owner');
+
+      try {
+        await JobKhojDataStore.expireJobs();
+      } catch (e) {
+        console.warn('Automatic expiry failed:', e);
+      }
+
+      return true;
     } catch (error) {
       console.error('Admin session verification failed:', error);
       JobKhojDataStore.setAdminLoggedIn(false);
