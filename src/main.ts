@@ -810,7 +810,7 @@ class JobKhojApp {
     const badgeClass = `badge-${/^(Government|Private|Bank|Railway|Teaching|Defence|Police|Apprentice)$/.test(job.category) ? job.category.toLowerCase() : 'government'}`;
 
     return `
-      <article class="job-card" id="job-card-${job.id}">
+      <article class="job-card" id="job-card-${this.escapeHtml(job.id)}">
         <div class="job-card-header">
           <div class="job-card-title-group">
             <span class="job-category-badge ${badgeClass}">${this.escapeHtml(job.category || '')} JOBS</span>
@@ -1298,7 +1298,7 @@ class JobKhojApp {
               ${job.documentsRequired && job.documentsRequired.length > 0 ? job.documentsRequired.map(doc => `
                 <span class="doc-badge">
                   ${Icons.file}
-                  <span>${doc}</span>
+                  <span>${this.escapeHtml(doc)}</span>
                 </span>
               `).join('') : '<span class="detail-text-content">Refer to the official notification for document specifications.</span>'}
             </div>
