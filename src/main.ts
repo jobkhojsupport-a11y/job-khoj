@@ -1093,6 +1093,48 @@ class JobKhojApp {
 
     const settings = JobKhojDataStore.getSettings();
 
+    // SEO: dynamic metadata for this individual job page
+    const seoTitle = `${job.title} – ${job.org} | Job Khoj`;
+    const seoDescription = `${job.title} recruitment by ${job.org}. Check vacancies, eligibility, important dates, application details, selection process and apply online on Job Khoj.`.slice(0, 160);
+    const seoUrl = `${location.origin}/job/${encodeURIComponent(job.slug || job.id)}`;
+
+    const setSeoMeta = (selector: string, attribute: string, key: string, value: string) => {
+      let meta = document.head.querySelector(selector) as HTMLMetaElement | null;
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.setAttribute(attribute, key);
+        document.head.appendChild(meta);
+      }
+      meta.content = value;
+    };
+
+    document.title = seoTitle;
+
+    setSeoMeta("#job-seo-description", "id", "job-seo-description", seoDescription);
+    const descriptionMeta = document.head.querySelector("#job-seo-description") as HTMLMetaElement;
+    descriptionMeta.name = "description";
+
+    let canonical = document.head.querySelector("#job-seo-canonical") as HTMLLinkElement | null;
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.id = "job-seo-canonical";
+      canonical.rel = "canonical";
+      document.head.appendChild(canonical);
+    }
+    canonical.href = seoUrl;
+
+    setSeoMeta('meta[property="og:title"]', "property", "og:title", seoTitle);
+    setSeoMeta('meta[property="og:description"]', "property", "og:description", seoDescription);
+    setSeoMeta('meta[property="og:url"]', "property", "og:url", seoUrl);
+    setSeoMeta('meta[property="og:type"]', "property", "og:type", "website");
+    setSeoMeta('meta[property="og:image"]', "property", "og:image", `${location.origin}/icon-512.png`);
+    setSeoMeta('meta[name="twitter:card"]', "name", "twitter:card", "summary_large_image");
+    setSeoMeta('meta[name="twitter:title"]', "name", "twitter:title", seoTitle);
+    setSeoMeta('meta[name="twitter:description"]', "name", "twitter:description", seoDescription);
+    setSeoMeta('meta[name="twitter:image"]', "name", "twitter:image", `${location.origin}/icon-512.png`);
+
+
+
     // SEO: JobPosting structured data
     const parsedPostedDate = new Date(job.postedDate); const jobDatePosted = this.normalizeSeoDate(job.postedDate) || (Number.isNaN(parsedPostedDate.getTime()) ? "" : parsedPostedDate.toISOString().slice(0, 10));
     const jobValidThrough = this.normalizeSeoDate(job.lastDate);
