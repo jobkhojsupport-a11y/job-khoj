@@ -1689,18 +1689,24 @@ class JobKhojApp {
           return;
         }
 
-        let { data: adminUser, error: adminError } = await supabase
-          .from('admin_users')
-          .select('user_id, role')
-          .eq('user_id', data.user.id)
-          .maybeSingle();
+        const { data: isAdmin, error: adminCheckError } =
+          await supabase.rpc('is_admin');
 
-        if (adminError || !adminUser) {
+        if (adminCheckError || isAdmin !== true) {
+          console.error('Admin authorization failed:', adminCheckError);
+
           await supabase.auth.signOut();
-          if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'You are authenticated, but you are not authorized to access the Admin Panel.'; }
+
+          if (errEl) {
+            errEl.style.display = 'block';
+            errEl.textContent = adminCheckError
+              ? `Admin authorization error: ${adminCheckError.message}`
+              : 'This account is not listed as an administrator.';
+          }
           return;
         }
-        JobKhojDataStore.setAdminLoggedIn(true, adminUser.role);
+
+        JobKhojDataStore.setAdminLoggedIn(true, 'owner');
         await JobKhojDataStore.loadAll();
         this.showToast('Successfully authenticated as Administrator');
         history.pushState({}, '', '/admin/overview'); this.handleRouting();
