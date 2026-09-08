@@ -271,6 +271,43 @@ class JobKhojApp {
     doc.querySelectorAll('script,iframe,object,embed,form,svg,math,link,meta').forEach(e=>e.remove());
     return doc.body.innerHTML;
   }
+  private normalizeSeoDate(value: string): string {
+    const s = (value || '').trim();
+    if (!s) return '';
+
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const d = new Date(Date.UTC(
+        Number(m[1]),
+        Number(m[2]) - 1,
+        Number(m[3])
+      ));
+
+      return d.getUTCFullYear() === Number(m[1]) &&
+        d.getUTCMonth() === Number(m[2]) - 1 &&
+        d.getUTCDate() === Number(m[3])
+        ? s
+        : '';
+    }
+
+    m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+    if (m) {
+      const day = Number(m[1]);
+      const month = Number(m[2]);
+      const year = Number(m[3]);
+      const d = new Date(Date.UTC(year, month - 1, day));
+
+      if (
+        d.getUTCFullYear() === year &&
+        d.getUTCMonth() === month - 1 &&
+        d.getUTCDate() === day
+      ) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+
+    return '';
+  }
   private escapeHtml(value: string): string {
     return value
       .replace(/&/g, '&amp;')
@@ -1055,6 +1092,52 @@ class JobKhojApp {
     }
 
     const settings = JobKhojDataStore.getSettings();
+
+    // SEO: JobPosting structured data
+    const jobDatePosted = this.normalizeSeoDate(job.postedDate);
+    const jobValidThrough = this.normalizeSeoDate(job.lastDate);
+
+    const jobSchema: Record<string, any> = {
+      "@context": "https://schema.org",
+      "@type": "JobPosting",
+      "title": job.title,
+      "description": job.jobDesc || `${job.title} recruitment notification by ${job.org}.`,
+      "datePosted": jobDatePosted,
+      "identifier": {
+        "@type": "PropertyValue",
+        "name": "Job Khoj",
+        "value": String(job.id)
+      },
+      "hiringOrganization": {
+        "@type": "Organization",
+        "name": job.org
+      },
+      "employmentType": job.jobType,
+      "url": `${location.origin}/job/${encodeURIComponent(job.slug || job.id)}`
+    };
+
+    if (jobValidThrough) {
+      jobSchema.validThrough = `${jobValidThrough}T23:59:59+05:30`;
+    }
+
+    if (job.location) {
+      jobSchema.jobLocation = {
+        "@type": "Place",
+        "address": {
+          "@type": "PostalAddress",
+          "addressCountry": "IN"
+        }
+      };
+    }
+
+    const existingJobSchema = document.getElementById("jobposting-schema");
+    existingJobSchema?.remove();
+
+    const schemaScript = document.createElement("script");
+    schemaScript.id = "jobposting-schema";
+    schemaScript.type = "application/ld+json";
+    schemaScript.textContent = JSON.stringify(jobSchema);
+    document.head.appendChild(schemaScript);
 
     // Prepare WhatsApp Apply Message with {{JOB_TITLE}} and {{JOB_ID}} placeholders
     let waMsg = settings.whatsappApplyMsgTemplate || "Hello JOB KHOJ, I want information regarding Job: {{JOB_TITLE}}, Job ID: {{JOB_ID}}";
