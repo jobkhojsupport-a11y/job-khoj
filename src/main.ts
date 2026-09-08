@@ -325,46 +325,6 @@ class JobKhojApp {
     if (!root) return;
 
     const settings = JobKhojDataStore.getSettings();
-    
-    // SEO: dynamic metadata for individual job pages
-    const seoTitle = `${job.title} – ${job.org} | Job Khoj`;
-    const seoDescription = `${job.title} recruitment by ${job.org}. Check vacancies, eligibility, important dates, application details, selection process and apply online on Job Khoj.`;
-    const seoUrl = `${location.origin}/job/${encodeURIComponent(job.slug || job.id)}`;
-
-    const setMeta = (selector: string, attribute: string, value: string) => {
-      let el = document.head.querySelector(selector) as HTMLMetaElement | null;
-      if (!el) {
-        el = document.createElement("meta");
-        el.setAttribute(attribute, value);
-        document.head.appendChild(el);
-      }
-      el.setAttribute("content", value);
-    };
-
-    document.title = seoTitle;
-
-    setMeta('#job-seo-description', 'id', 'job-seo-description');
-    const seoDescriptionMeta = document.head.querySelector('#job-seo-description') as HTMLMetaElement;
-    seoDescriptionMeta.name = 'description';
-    seoDescriptionMeta.content = seoDescription;
-
-    let canonical = document.head.querySelector('#job-seo-canonical') as HTMLLinkElement | null;
-    if (!canonical) {
-      canonical = document.createElement('link');
-      canonical.id = 'job-seo-canonical';
-      canonical.rel = 'canonical';
-      document.head.appendChild(canonical);
-    }
-    canonical.href = seoUrl;
-
-    setMeta('meta[property="og:title"]', 'property', seoTitle);
-    setMeta('meta[property="og:description"]', 'property', seoDescription);
-    setMeta('meta[property="og:url"]', 'property', seoUrl);
-    setMeta('meta[property="og:type"]', 'property', 'article');
-    setMeta('meta[name="twitter:card"]', 'name', 'summary');
-    setMeta('meta[name="twitter:title"]', 'name', seoTitle);
-    setMeta('meta[name="twitter:description"]', 'name', seoDescription);
-
     const activeRoute = this.currentRoute.split('?')[0];
 
     // Clean public structure
