@@ -24,12 +24,17 @@ class JobKhojApp {
   }
 
  private async init(): Promise<void> {
-  await JobKhojDataStore.loadAdSlots();
-    JobKhojDataStore.expireJobs();
+  await JobKhojDataStore.loadAll();
+    await JobKhojDataStore.loadAdSlots();
     this.applySiteSEO();
     document.addEventListener('click', (e) => { const target = e.target as HTMLElement; if (target?.closest('.ad-slot-container a')) JobKhojDataStore.incrementStat('applyClicks', 'Advertisement link clicked'); });
     // Record page view in aggregate analytics
     JobKhojDataStore.incrementStat('totalPageViews');
+
+    // Register only the first-party service worker; this replaces any legacy third-party worker.
+    if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js?v=4').catch(err => console.warn('Service worker unavailable', err)); }
+
+    window.addEventListener('unhandledrejection', (event) => { console.error(event.reason); this.showToast(event.reason?.message || 'Operation failed. No changes were saved.', false); });
 
     // Setup hash router and browser popstate
     window.addEventListener('hashchange', () => this.handleRouting());
@@ -37,26 +42,79 @@ class JobKhojApp {
 
     // Check for direct /admin path in browser
     if (window.location.pathname === '/admin' || window.location.pathname.endsWith('/admin')) {
-      window.location.hash = '#admin';
+      history.replaceState({}, '', '/admin');
     }
 
     // Initial render
     this.handleRouting();
   }
 
-  // Router handler
-  public handleRouting(): void {
-    let hash = window.location.hash.slice(1);
-    if (!hash || hash === '/') {
-      hash = 'home';
+  private async verifyAdminSession(): Promise<boolean> {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error || !user) {
+        JobKhojDataStore.setAdminLoggedIn(false);
+        return false;
+      }
+      const { data: adminUser, error: adminError } = await supabase
+        .from('admin_users')
+        .select('user_id, role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const authorised = !adminError && !!adminUser;
+      JobKhojDataStore.setAdminLoggedIn(authorised, adminUser?.role);
+      if (authorised) { try { await JobKhojDataStore.expireJobs(); } catch (e) { console.warn('Automatic expiry skipped', e); } }
+      if (!authorised) await supabase.auth.signOut();
+      return authorised;
+    } catch (error) {
+      console.error('Admin session verification failed:', error);
+      JobKhojDataStore.setAdminLoggedIn(false);
+      return false;
     }
+  }
 
+  // Router handler
+  private pathToRoute(): string {
+    const path = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (window.location.hash) { const legacy=window.location.hash.slice(1); const [legacyRoute, legacyQuery='']=legacy.split('?'); const cleanPath=this.routePath(legacyRoute); history.replaceState({},'',cleanPath+(legacyQuery?'?'+legacyQuery:'')); return cleanPath.replace(/^\//,'') || 'home'; }
+    if (path === '/') return 'home';
+    const clean = path.replace(/^\//, '');
+    if (clean === 'admin') return 'admin';
+    return clean;
+  }
+
+  private routePath(route: string): string {
+    const r = route.replace(/^#/, '').replace(/^\//, '');
+    if (!r || r === 'home') return '/';
+    if (r.startsWith('category-')) return '/category/' + r.slice('category-'.length);
+    if (r.startsWith('job/')) return '/job/' + encodeURIComponent(r.slice(4));
+    if (r.startsWith('article/')) return '/article/' + encodeURIComponent(r.slice(8));
+    return '/' + r;
+  }
+
+  private rewriteInternalLinks(): void {
+    document.querySelectorAll<HTMLAnchorElement>('a[href^=\"#\"]').forEach(a => {
+      const raw = a.getAttribute('href') || '';
+      if (!raw || raw === '#') return;
+      const [routePart, query=''] = raw.slice(1).split('?');
+      a.href = this.routePath(routePart) + (query ? '?' + query : '');
+    });
+  }
+
+  public async handleRouting(): Promise<void> {
+    let hash = this.pathToRoute();
+    if (hash.startsWith('category/')) hash = 'category-' + hash.slice('category/'.length);
+
+    const redirect = JobKhojDataStore.getFeatures().redirectRules.find(r => r.enabled && r.from.replace(/^#/, '').replace(/^\//,'') === hash.replace(/^\//,''));
+    if (redirect && redirect.to && redirect.to.replace(/^#/, '') !== hash) { const target=redirect.to.trim(); if(/^https?:\/\//i.test(target)){ window.location.assign(target); return; } history.replaceState({},'',this.routePath(target)); return void this.handleRouting(); }
     this.currentRoute = hash;
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    this.updateRouteSEO(hash);
 
     // Check if route is admin
     if (hash === 'admin' || hash.startsWith('admin/')) {
-      if (!JobKhojDataStore.isAdminLoggedIn()) {
+      const authorised = await this.verifyAdminSession();
+      if (!authorised) {
         this.renderAdminLogin();
       } else {
         const sub = hash.split('/')[1] || 'overview';
@@ -78,7 +136,7 @@ class JobKhojApp {
       const catKey = hash.replace('category-', '');
       this.renderCategoryView(catKey);
     } else if (hash.startsWith('job/')) {
-      const idOrSlug = hash.replace('job/', '');
+      const idOrSlug = decodeURIComponent(hash.replace('job/', ''));
       this.renderJobDetailView(idOrSlug);
     } else if (hash === 'exams') {
       this.renderExamsView();
@@ -89,14 +147,31 @@ class JobKhojApp {
     } else if (hash === 'blog') {
       this.renderBlogView();
     } else if (hash.startsWith('article/')) {
-      const slugOrId = hash.replace('article/', '');
+      const slugOrId = decodeURIComponent(hash.replace('article/', ''));
       this.renderArticleDetailView(slugOrId);
     } else if (hash.startsWith('search')) {
-      const query = new URLSearchParams(window.location.hash.split('?')[1] || '').get('q') || '';
+      const query = new URLSearchParams(window.location.search || (window.location.hash.split('?')[1] || '')).get('q') || '';
       this.renderSearchResultsView(query);
     } else {
       this.renderNotFoundView();
     }
+    this.rewriteInternalLinks();
+  }
+
+  private updateRouteSEO(route: string): void {
+    const f=JobKhojDataStore.getFeatures();
+    let base=location.origin;
+    if(f.seoCanonicalUrl){ try { const u=new URL(f.seoCanonicalUrl, location.origin); base=u.origin + u.pathname.replace(/\/$/,''); } catch {} }
+    const canonical=(base==='/'?'' : base)+this.routePath(route);
+    let link=document.querySelector('link[rel="canonical"]') as HTMLLinkElement|null;
+    if(!link){link=document.createElement('link');link.rel='canonical';document.head.appendChild(link);}
+    link.href=canonical;
+    const titles:Record<string,string>={home:f.seoSiteTitle,jobs:`Latest Jobs | ${f.seoSiteTitle}`,exams:`Competitive Exams | ${f.seoSiteTitle}`,results:`Results | ${f.seoSiteTitle}`,'admit-cards':`Admit Cards | ${f.seoSiteTitle}`,blog:`Job News & Career Blog | ${f.seoSiteTitle}`};
+    let description=f.seoSiteDescription;
+    if(route.startsWith('job/')){ const key=decodeURIComponent(route.slice(4)); const j=JobKhojDataStore.getJobs().find(x=>x.slug===key||x.id===key); if(j){ document.title=`${j.title} | ${f.seoSiteTitle}`; description=`${j.title} — ${j.org}. Vacancy: ${j.vacancies}. Qualification: ${j.qualification}. Last date: ${j.lastDate}.`; } else document.title=titles[route]||f.seoSiteTitle; }
+    else if(route.startsWith('article/')){ const key=decodeURIComponent(route.slice(8)); const a=JobKhojDataStore.getBlog().find(x=>x.slug===key||x.id===key); if(a){ document.title=a.seoTitle||`${a.title} | ${f.seoSiteTitle}`; description=a.seoDescription||a.excerpt||f.seoSiteDescription; } else document.title=titles[route]||f.seoSiteTitle; }
+    else document.title=titles[route]||f.seoSiteTitle;
+    let meta=document.querySelector('meta[name="description"]') as HTMLMetaElement|null; if(!meta){meta=document.createElement('meta');meta.name='description';document.head.appendChild(meta);} meta.content=description;
   }
 
   private applySiteSEO(): void {
@@ -123,7 +198,7 @@ class JobKhojApp {
 
     const toast = document.createElement('div');
     toast.className = `toast ${isSuccess ? 'toast-success' : ''}`;
-    toast.innerHTML = `<span>${isSuccess ? Icons.check : Icons.x}</span><span>${message}</span>`;
+    toast.innerHTML = `<span>${isSuccess ? Icons.check : Icons.x}</span><span>${this.escapeHtml(message)}</span>`;
     container.appendChild(toast);
 
     requestAnimationFrame(() => {
@@ -144,11 +219,30 @@ class JobKhojApp {
       return '';
     }
 
-    return `<div class="ad-slot-container ${customClass}" id="ad-container-${this.escapeHtml(slotId)}">
-      ${ad.htmlContent}
-    </div>`;
+    const safeHtml = this.sanitizeAdHtml(ad.htmlContent);
+    return `<div class="ad-slot-container ${this.escapeHtml(customClass)}" id="ad-container-${this.escapeHtml(slotId)}">${safeHtml}</div>`;
   }
 
+
+  private sanitizeAdHtml(html: string): string {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const allowed = new Set(['A','IMG','DIV','SPAN','P','STRONG','B','EM','I','BR','UL','OL','LI','TABLE','TR','TD','TH','H1','H2','H3','H4','SMALL']);
+    const walk = (node: Element) => {
+      [...node.children].forEach(child => {
+        if (!allowed.has(child.tagName)) { child.replaceWith(...[...child.childNodes]); return; }
+        [...child.attributes].forEach(attr => {
+          const n=attr.name.toLowerCase(), v=attr.value.trim();
+          if (n.startsWith('on') || n==='style' || (n==='href' || n==='src') && !/^(https?:|mailto:|tel:|\/|#)/i.test(v)) child.removeAttribute(attr.name);
+          else if (n==='href' || n==='src') { try { const u=new URL(v,location.origin); const allowedProtocols=(n==='src'?['https:']:['http:','https:']); if(!allowedProtocols.includes(u.protocol)) child.removeAttribute(attr.name); else child.setAttribute(attr.name,u.href); } catch { child.removeAttribute(attr.name); } }
+          else if (!['class','id','title','alt','target','rel','width','height'].includes(n)) child.removeAttribute(attr.name);
+        });
+        walk(child);
+      });
+    };
+    walk(doc.body);
+    doc.querySelectorAll('script,iframe,object,embed,form,svg,math,link,meta').forEach(e=>e.remove());
+    return doc.body.innerHTML;
+  }
   private escapeHtml(value: string): string {
     return value
       .replace(/&/g, '&amp;')
@@ -175,38 +269,38 @@ class JobKhojApp {
         ${this.renderAdSlot('slot-1')}
       </div>
 
-      ${JobKhojDataStore.getFeatures().announcementEnabled ? `<div class="site-announcement" style="background:#0B63CE;color:#fff;padding:9px 14px;text-align:center;font-size:13px;font-weight:800;"><a href="${JobKhojDataStore.getFeatures().announcementUrl}" style="color:#fff;text-decoration:none;">📢 ${this.escapeHtml(JobKhojDataStore.getFeatures().announcementText)}</a></div>` : ''}
+      ${JobKhojDataStore.getFeatures().announcementEnabled ? `<div class="site-announcement" style="background:#0B63CE;color:#fff;padding:9px 14px;text-align:center;font-size:13px;font-weight:800;"><a href="${this.escapeHtml(JobKhojDataStore.getFeatures().announcementUrl || "/")}" style="color:#fff;text-decoration:none;">📢 ${this.escapeHtml(JobKhojDataStore.getFeatures().announcementText)}</a></div>` : ''}
 
       <!-- Public Header -->
       <header class="site-header" id="site-header">
         <div class="container header-container">
           <!-- Logo -->
-          <a href="#home" class="brand-logo" id="header-brand-logo">
+          <a href="/" class="brand-logo" id="header-brand-logo">
             <div class="logo-icon-box" aria-hidden="true"><svg viewBox="0 0 48 48" width="38" height="38" role="img"><circle cx="24" cy="24" r="21" fill="#fff" stroke="#0B63CE" stroke-width="3"/><circle cx="24" cy="24" r="14" fill="#0B63CE" opacity=".10"/><rect x="16" y="15" width="16" height="13" rx="2.5" fill="#FF3B3B"/><path d="M18 28h12l3 6H15l3-6Z" fill="#0B63CE"/><path d="M19 18l5 4 5-4" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <div class="logo-text-group">
               <div class="logo-title">
                 <span class="logo-job">JOB</span>
                 <span class="logo-khoj">KHOJ</span>
               </div>
-              <span class="logo-tagline">${settings.siteTagline || 'FIND YOUR NEXT OPPORTUNITY'}</span>
+              <span class="logo-tagline">${this.escapeHtml(settings.siteTagline || 'FIND YOUR NEXT OPPORTUNITY')}</span>
             </div>
           </a>
 
           <!-- Desktop Navigation -->
           <nav class="nav-desktop" id="nav-desktop">
-            <a href="#home" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
-            <a href="#jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
-            <a href="#category-govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
-            <a href="#category-private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
-            <a href="#category-bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank</a>
-            <a href="#category-railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway</a>
-            <a href="#category-defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence</a>
-            <a href="#category-teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching</a>
-            <a href="#category-police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police</a>
-            <a href="#exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Exams</a>
-            <a href="#results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
-            <a href="#admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
-            <a href="#blog" class="nav-link ${activeRoute === 'blog' ? 'active' : ''}">Blog</a>
+            <a href="/" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
+            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
+            <a href="/category/govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
+            <a href="/category/private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
+            <a href="/category/bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank</a>
+            <a href="/category/railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway</a>
+            <a href="/category/defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence</a>
+            <a href="/category/teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching</a>
+            <a href="/category/police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police</a>
+            <a href="/exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Exams</a>
+            <a href="/results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
+            <a href="/admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
+            <a href="/blog" class="nav-link ${activeRoute === 'blog' ? 'active' : ''}">Blog</a>
           </nav>
 
           <!-- Right Action: WhatsApp Contact & Mobile Hamburger -->
@@ -243,19 +337,19 @@ class JobKhojApp {
             </button>
           </div>
           <nav class="mobile-drawer-nav">
-            <a href="#home" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
-            <a href="#jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
-            <a href="#category-govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
-            <a href="#category-private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
-            <a href="#category-bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank Jobs</a>
-            <a href="#category-railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway Jobs</a>
-            <a href="#category-defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence Jobs</a>
-            <a href="#category-teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching Jobs</a>
-            <a href="#category-police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police Jobs</a>
-            <a href="#exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Competitive Exams</a>
-            <a href="#results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
-            <a href="#admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
-            <a href="#blog" class="nav-link ${activeRoute === 'blog' ? 'active' : ''}">Blog & Updates</a>
+            <a href="/" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
+            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
+            <a href="/category/govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
+            <a href="/category/private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
+            <a href="/category/bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank Jobs</a>
+            <a href="/category/railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway Jobs</a>
+            <a href="/category/defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence Jobs</a>
+            <a href="/category/teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching Jobs</a>
+            <a href="/category/police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police Jobs</a>
+            <a href="/exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Competitive Exams</a>
+            <a href="/results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
+            <a href="/admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
+            <a href="/blog" class="nav-link ${activeRoute === 'blog' ? 'active' : ''}">Blog & Updates</a>
           </nav>
           <div class="mobile-drawer-footer">
             <button class="whatsapp-btn w-full justify-center" id="drawer-whatsapp-btn">
@@ -269,7 +363,7 @@ class JobKhojApp {
       <!-- Main Content Container where page views render -->
       <main id="app-main-content" class="flex-1"></main>
 
-      ${JobKhojDataStore.getFeatures().popupEnabled ? `<div id="site-alert-popup" style="position:fixed;right:18px;bottom:18px;max-width:360px;background:#fff;border:1px solid #E2E8F0;border-radius:16px;box-shadow:0 20px 50px rgba(15,23,42,.18);padding:18px;z-index:9999;display:none;"><button id="site-alert-close" style="position:absolute;right:10px;top:8px;border:0;background:none;font-size:20px;cursor:pointer;">×</button><strong style="font-size:17px;color:#0F172A;display:block;margin-bottom:7px;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupTitle)}</strong><p style="font-size:13px;color:#64748B;line-height:1.5;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupMessage)}</p><a href="${JobKhojDataStore.getFeatures().popupUrl}" class="btn-admin-action-primary" style="display:inline-block;text-decoration:none;">VIEW UPDATES</a></div>` : ''}
+      ${JobKhojDataStore.getFeatures().popupEnabled ? `<div id="site-alert-popup" style="position:fixed;right:18px;bottom:18px;max-width:360px;background:#fff;border:1px solid #E2E8F0;border-radius:16px;box-shadow:0 20px 50px rgba(15,23,42,.18);padding:18px;z-index:9999;display:none;"><button id="site-alert-close" style="position:absolute;right:10px;top:8px;border:0;background:none;font-size:20px;cursor:pointer;">×</button><strong style="font-size:17px;color:#0F172A;display:block;margin-bottom:7px;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupTitle)}</strong><p style="font-size:13px;color:#64748B;line-height:1.5;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupMessage)}</p><a href="${this.escapeHtml(JobKhojDataStore.getFeatures().popupUrl || "/")}" class="btn-admin-action-primary" style="display:inline-block;text-decoration:none;">VIEW UPDATES</a>${JobKhojDataStore.getFeatures().pushNotificationsEnabled ? '<button id="enable-push-btn" class="btn-table-action" style="margin-left:8px;">ENABLE ALERTS</button>' : ''}</div>` : ''}
 
       <!-- Public Footer -->
       <footer class="site-footer" id="site-footer">
@@ -277,19 +371,19 @@ class JobKhojApp {
           <div class="footer-top-grid">
             <!-- Left Brand Column -->
             <div>
-              <a href="#home" class="brand-logo">
+              <a href="/" class="brand-logo">
                 <div class="logo-icon-box" aria-hidden="true"><svg viewBox="0 0 48 48" width="38" height="38" role="img"><circle cx="24" cy="24" r="21" fill="#fff" stroke="#0B63CE" stroke-width="3"/><circle cx="24" cy="24" r="14" fill="#0B63CE" opacity=".10"/><rect x="16" y="15" width="16" height="13" rx="2.5" fill="#FF3B3B"/><path d="M18 28h12l3 6H15l3-6Z" fill="#0B63CE"/><path d="M19 18l5 4 5-4" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
                 <div class="logo-text-group">
                   <div class="logo-title">
                     <span class="logo-job">JOB</span>
                     <span class="logo-khoj">KHOJ</span>
                   </div>
-                  <span class="logo-tagline">${settings.siteTagline || 'FIND YOUR NEXT OPPORTUNITY'}</span>
+                  <span class="logo-tagline">${this.escapeHtml(settings.siteTagline || 'FIND YOUR NEXT OPPORTUNITY')}</span>
                 </div>
               </a>
-              <p class="footer-brand-desc">${settings.footerAboutText}</p>
+              <p class="footer-brand-desc">${this.escapeHtml(settings.footerAboutText)}</p>
               <div class="footer-contact-info">
-                Support: <a href="mailto:${settings.supportEmail}">${settings.supportEmail}</a>
+                Support: <a href="mailto:${this.escapeHtml(settings.supportEmail)}">${this.escapeHtml(settings.supportEmail)}</a>
               </div>
             </div>
 
@@ -297,11 +391,11 @@ class JobKhojApp {
             <div>
               <h4 class="footer-column-title">QUICK RECRUITMENTS</h4>
               <ul class="footer-links-list">
-                <li class="footer-link-item"><a href="#category-govt">Government Jobs</a></li>
-                <li class="footer-link-item"><a href="#category-private">Private Jobs</a></li>
-                <li class="footer-link-item"><a href="#category-bank">Bank Jobs</a></li>
-                <li class="footer-link-item"><a href="#category-railway">Railway Jobs</a></li>
-                <li class="footer-link-item"><a href="#category-teaching">Teaching Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/govt">Government Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/private">Private Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/bank">Bank Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/railway">Railway Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/teaching">Teaching Jobs</a></li>
               </ul>
             </div>
 
@@ -309,11 +403,11 @@ class JobKhojApp {
             <div>
               <h4 class="footer-column-title">EXAMS & NOTICES</h4>
               <ul class="footer-links-list">
-                <li class="footer-link-item"><a href="#category-defence">Defence Jobs</a></li>
-                <li class="footer-link-item"><a href="#category-police">Police Jobs</a></li>
-                <li class="footer-link-item"><a href="#exams">Competitive Exams</a></li>
-                <li class="footer-link-item"><a href="#results">Examination Results</a></li>
-                <li class="footer-link-item"><a href="#admit-cards">Admit Cards</a></li>
+                <li class="footer-link-item"><a href="/category/defence">Defence Jobs</a></li>
+                <li class="footer-link-item"><a href="/category/police">Police Jobs</a></li>
+                <li class="footer-link-item"><a href="/exams">Competitive Exams</a></li>
+                <li class="footer-link-item"><a href="/results">Examination Results</a></li>
+                <li class="footer-link-item"><a href="/admit-cards">Admit Cards</a></li>
               </ul>
             </div>
           </div>
@@ -419,7 +513,7 @@ class JobKhojApp {
         <!-- BROWSE BY CATEGORY -->
         <div class="section-header-flex">
           <h2 class="section-heading">BROWSE BY CATEGORY</h2>
-          <a href="#jobs" class="view-all-link">VIEW ALL CATEGORIES ${Icons.arrowRight}</a>
+          <a href="/jobs" class="view-all-link">VIEW ALL CATEGORIES ${Icons.arrowRight}</a>
         </div>
 
         <div class="category-grid">
@@ -493,7 +587,7 @@ class JobKhojApp {
           <div class="section-area">
             <div class="section-header-flex">
               <h2 class="section-heading">LATEST GOVERNMENT ALERTS</h2>
-              <a href="#category-govt" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
+              <a href="/category/govt" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
             </div>
             <div class="job-cards-list">
               ${govtJobs.length > 0 ? govtJobs.slice(0, 4).map(job => this.renderJobCardHtml(job)).join('') : `
@@ -509,7 +603,7 @@ class JobKhojApp {
           <div class="section-area">
             <div class="section-header-flex">
               <h2 class="section-heading">CORPORATE OPENINGS</h2>
-              <a href="#category-private" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
+              <a href="/category/private" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
             </div>
             <div class="job-cards-list">
               ${privateJobs.length > 0 ? privateJobs.slice(0, 4).map(job => this.renderJobCardHtml(job)).join('') : `
@@ -532,7 +626,7 @@ class JobKhojApp {
                 <h3 class="twin-card-title">EXAMINATION RESULTS</h3>
                 <div class="twin-card-subtitle">SCORECARDS & MERIT LISTS</div>
               </div>
-              <a href="#results" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
+              <a href="/results" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
             </div>
             <div class="item-row-list">
               ${results.length > 0 ? results.slice(0, 3).map(res => `
@@ -541,7 +635,7 @@ class JobKhojApp {
                   <div class="item-row-org">${res.org} • Declared: ${res.resultDate}</div>
                   <div class="item-row-footer">
                     <span>${res.exam}</span>
-                    <a href="${res.resultUrl}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
+                    <a href="${this.escapeHtml(res.resultUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
                       VIEW RESULT ↗
                     </a>
                   </div>
@@ -562,7 +656,7 @@ class JobKhojApp {
                 <h3 class="twin-card-title">ADMIT CARDS</h3>
                 <div class="twin-card-subtitle">HALL TICKET DOWNLOADS</div>
               </div>
-              <a href="#admit-cards" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
+              <a href="/admit-cards" class="view-all-link">VIEW ALL ${Icons.arrowRight}</a>
             </div>
             <div class="item-row-list">
               ${admitCards.length > 0 ? admitCards.slice(0, 3).map(ac => `
@@ -571,7 +665,7 @@ class JobKhojApp {
                   <div class="item-row-org">${ac.org} • Released: ${ac.releaseDate}</div>
                   <div class="item-row-footer">
                     <span>Exam: ${ac.examDate}</span>
-                    <a href="${ac.downloadUrl}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
+                    <a href="${this.escapeHtml(ac.downloadUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
                       DOWNLOAD ADMIT CARD ↗
                     </a>
                   </div>
@@ -594,7 +688,7 @@ class JobKhojApp {
               <strong>Don’t Miss Any Update!</strong>
               <span>Join Our Telegram Channel</span>
             </div>
-            <a href="${settings.telegramChannelUrl}" target="_blank" rel="noopener noreferrer" class="social-cta-btn telegram-btn">Join Now</a>
+            <a href="${this.escapeHtml(settings.telegramChannelUrl)}" target="_blank" rel="noopener noreferrer" class="social-cta-btn telegram-btn">Join Now</a>
           </div>
           <div class="social-cta-card whatsapp-cta-card">
             <div class="social-cta-icon">${Icons.whatsapp}</div>
@@ -602,7 +696,7 @@ class JobKhojApp {
               <strong>Get Daily Job Alerts</strong>
               <span>On WhatsApp</span>
             </div>
-            <a href="${settings.whatsappChannelUrl}" target="_blank" rel="noopener noreferrer" class="social-cta-btn whatsapp-btn-small" id="home-whatsapp-channel-btn">Join Now</a>
+            <a href="${this.escapeHtml(settings.whatsappChannelUrl)}" target="_blank" rel="noopener noreferrer" class="social-cta-btn whatsapp-btn-small" id="home-whatsapp-channel-btn">Join Now</a>
           </div>
         </div>
 
@@ -610,7 +704,7 @@ class JobKhojApp {
     `;
 
     const alertPopup = document.getElementById('site-alert-popup');
-    if (alertPopup) { setTimeout(() => { alertPopup.style.display = 'block'; }, JobKhojDataStore.getFeatures().popupDelayMs || 5000); document.getElementById('site-alert-close')?.addEventListener('click', () => { alertPopup.style.display='none'; }); }
+    if (alertPopup) { setTimeout(() => { alertPopup.style.display = 'block'; }, JobKhojDataStore.getFeatures().popupDelayMs || 5000); document.getElementById('site-alert-close')?.addEventListener('click', () => { alertPopup.style.display='none'; }); document.getElementById('enable-push-btn')?.addEventListener('click', async () => { try { await JobKhojDataStore.subscribeToPush(); this.showToast('Job alerts enabled on this device'); } catch(e:any) { this.showToast(e?.message || 'Could not enable notifications', false); } }); }
 
     // Search Form Handler
     document.getElementById('home-search-form')?.addEventListener('submit', (e) => {
@@ -618,7 +712,7 @@ class JobKhojApp {
       const input = (document.getElementById('home-search-input') as HTMLInputElement)?.value;
       if (input.trim()) {
         JobKhojDataStore.recordSearch(input.trim());
-        window.location.hash = `#search?q=${encodeURIComponent(input.trim())}`;
+        history.pushState({}, '', `/search?q=${encodeURIComponent(input.trim())}`); void this.handleRouting();
       }
     });
 
@@ -628,7 +722,7 @@ class JobKhojApp {
         const kw = pill.getAttribute('data-keyword');
         if (kw) {
           JobKhojDataStore.recordSearch(kw);
-          window.location.hash = `#search?q=${encodeURIComponent(kw)}`;
+          history.pushState({}, '', `/search?q=${encodeURIComponent(kw)}`); void this.handleRouting();
         }
       });
     });
@@ -637,7 +731,7 @@ class JobKhojApp {
     document.querySelectorAll('.category-card').forEach(card => {
       card.addEventListener('click', () => {
         const cat = card.getAttribute('data-cat');
-        window.location.hash = `#category-${cat}`;
+        history.pushState({}, '', `/category/${encodeURIComponent(cat)}`); void this.handleRouting();
       });
     });
 
@@ -648,49 +742,49 @@ class JobKhojApp {
   // Render individual Job Card HTML
   private renderJobCardHtml(job: JobItem): string {
     const statusClass = job.status === 'Active' ? 'status-active' : (job.status === 'Closing Soon' ? 'status-closing-soon' : 'status-expired');
-    const badgeClass = `badge-${job.category.toLowerCase()}`;
+    const badgeClass = `badge-${/^(Government|Private|Bank|Railway|Teaching|Defence|Police|Apprentice)$/.test(job.category) ? job.category.toLowerCase() : 'government'}`;
 
     return `
       <article class="job-card" id="job-card-${job.id}">
         <div class="job-card-header">
           <div class="job-card-title-group">
-            <span class="job-category-badge ${badgeClass}">${job.category} JOBS</span>
-            <h3 class="job-card-title" data-job-id="${job.id}">${job.title}</h3>
-            <div class="job-card-org">${job.org}</div>
+            <span class="job-category-badge ${badgeClass}">${this.escapeHtml(job.category || '')} JOBS</span>
+            <h3 class="job-card-title" data-job-id="${this.escapeHtml(job.id)}">${this.escapeHtml(job.title || '')}</h3>
+            <div class="job-card-org">${this.escapeHtml(job.org || '')}</div>
           </div>
-          <span class="job-status-badge ${statusClass}">${job.status}</span>
+          <span class="job-status-badge ${statusClass}">${this.escapeHtml(job.status || '')}</span>
         </div>
 
         <div class="job-meta-grid">
           <div class="job-meta-item">
             <span class="job-meta-label">Total Vacancies</span>
-            <span class="job-meta-val">${job.vacancies}</span>
+            <span class="job-meta-val">${this.escapeHtml(job.vacancies || '')}</span>
           </div>
           <div class="job-meta-item">
             <span class="job-meta-label">Qualification</span>
-            <span class="job-meta-val">${job.qualification}</span>
+            <span class="job-meta-val">${this.escapeHtml(job.qualification || '')}</span>
           </div>
           <div class="job-meta-item">
             <span class="job-meta-label">Location</span>
-            <span class="job-meta-val">${job.location}</span>
+            <span class="job-meta-val">${this.escapeHtml(job.location || '')}</span>
           </div>
           <div class="job-meta-item">
             <span class="job-meta-label">Salary / Pay</span>
-            <span class="job-meta-val">${job.salary}</span>
+            <span class="job-meta-val">${this.escapeHtml(job.salary || '')}</span>
           </div>
         </div>
 
         <div class="job-card-footer">
           <div class="job-dates-info">
-            <span>Posted: <strong>${job.postedDate}</strong></span>
+            <span>Posted: <strong>${this.escapeHtml(job.postedDate || '')}</strong></span>
             <span>•</span>
-            <span>Last Date: <strong style="color: #D34300;">${job.lastDate}</strong></span>
+            <span>Last Date: <strong style="color: #D34300;">${this.escapeHtml(job.lastDate || '')}</strong></span>
           </div>
           <div class="job-btn-group">
-            <button class="btn-view-details" data-job-id="${job.id}">
+            <button class="btn-view-details" data-job-id="${this.escapeHtml(job.id)}">
               VIEW DETAILS
             </button>
-            <button class="btn-apply-now" data-apply-url="${job.applyUrl}" data-job-id="${job.id}">
+            <button class="btn-apply-now" data-apply-url="${this.escapeHtml(job.applyUrl || "")}" data-job-id="${this.escapeHtml(job.id)}">
               APPLY NOW ${Icons.external}
             </button>
           </div>
@@ -707,7 +801,7 @@ class JobKhojApp {
         const jobId = (e.currentTarget as HTMLElement).getAttribute('data-job-id');
         if (jobId) {
           JobKhojDataStore.incrementStat('jobViews');
-          window.location.hash = `#job/${jobId}`;
+          history.pushState({}, '', `/job/${encodeURIComponent(jobId)}`); void this.handleRouting();
         }
       });
     });
@@ -915,7 +1009,7 @@ class JobKhojApp {
     if (!main) return;
 
     const jobs = JobKhojDataStore.getJobs();
-    const job = jobs.find(j => j.id === idOrSlug || j.slug === idOrSlug) || (jobs.length > 0 ? jobs[0] : null);
+    const job = jobs.find(j => j.id === idOrSlug || j.slug === idOrSlug) || null;
     if (!job) {
       main.innerHTML = `
         <div class="container section-padding">
@@ -924,7 +1018,7 @@ class JobKhojApp {
             <h3 class="empty-state-title">Recruitment Notification Not Found</h3>
             <p class="empty-state-sub">The requested job recruitment could not be found or may have expired.</p>
             <div style="margin-top:16px;">
-              <a href="#jobs" class="btn-view-details">Browse All Active Jobs</a>
+              <a href="/jobs" class="btn-view-details">Browse All Active Jobs</a>
             </div>
           </div>
         </div>
@@ -943,11 +1037,11 @@ class JobKhojApp {
       <div class="container" style="padding-top: 24px; padding-bottom: 64px;">
         <!-- Breadcrumb -->
         <nav class="breadcrumb-nav">
-          <a href="#home">Home</a>
+          <a href="/">Home</a>
           <span class="breadcrumb-separator">›</span>
-          <a href="#category-${job.category.toLowerCase()}">${job.category} Jobs</a>
+          <a href="/category/${job.category.toLowerCase()==="government"?"govt":job.category.toLowerCase()}">${this.escapeHtml(job.category || '')} Jobs</a>
           <span class="breadcrumb-separator">›</span>
-          <span>${job.title}</span>
+          <span>${this.escapeHtml(job.title || '')}</span>
         </nav>
 
         <!-- Job Detail Top Ad Slot 4 -->
@@ -957,15 +1051,15 @@ class JobKhojApp {
         <div class="job-detail-card">
           <!-- Detail Header -->
           <div class="detail-header-block">
-            <span class="job-category-badge badge-${job.category.toLowerCase()}">${job.category} RECRUITMENT</span>
-            <h1 class="detail-job-title">${job.title}</h1>
-            <div class="detail-org-name">${job.org}</div>
+            <span class="job-category-badge badge-${/^(Government|Private|Bank|Railway|Teaching|Defence|Police|Apprentice)$/.test(job.category) ? job.category.toLowerCase() : 'government'}">${this.escapeHtml(job.category || '')} RECRUITMENT</span>
+            <h1 class="detail-job-title">${this.escapeHtml(job.title || '')}</h1>
+            <div class="detail-org-name">${this.escapeHtml(job.org || '')}</div>
             <div class="flex items-center gap-3" style="font-size:13px;color:var(--muted);">
-              <span>Posted: <strong>${job.postedDate}</strong></span>
+              <span>Posted: <strong>${this.escapeHtml(job.postedDate || '')}</strong></span>
               <span>•</span>
-              <span>Status: <strong style="color:var(--green);">${job.status}</strong></span>
+              <span>Status: <strong style="color:var(--green);">${this.escapeHtml(job.status || '')}</strong></span>
               <span>•</span>
-              <span>Job Type: <strong>${job.jobType}</strong></span>
+              <span>Job Type: <strong>${this.escapeHtml(job.jobType || '')}</strong></span>
             </div>
           </div>
 
@@ -973,75 +1067,75 @@ class JobKhojApp {
           <div class="key-stats-grid">
             <div class="stat-box">
               <span class="stat-box-label">Total Vacancies</span>
-              <span class="stat-box-value">${job.vacancies}</span>
+              <span class="stat-box-value">${this.escapeHtml(job.vacancies || '')}</span>
             </div>
             <div class="stat-box">
               <span class="stat-box-label">Application Start Date</span>
-              <span class="stat-box-value">${job.appStartDate}</span>
+              <span class="stat-box-value">${this.escapeHtml(job.appStartDate || '')}</span>
             </div>
             <div class="stat-box">
               <span class="stat-box-label">Last Date to Apply</span>
-              <span class="stat-box-value" style="color:#D34300;">${job.lastDate}</span>
+              <span class="stat-box-value" style="color:#D34300;">${this.escapeHtml(job.lastDate || '')}</span>
             </div>
             <div class="stat-box">
               <span class="stat-box-label">Exam Date</span>
-              <span class="stat-box-value">${job.examDate}</span>
+              <span class="stat-box-value">${this.escapeHtml(job.examDate || '')}</span>
             </div>
             <div class="stat-box">
               <span class="stat-box-label">Job Location</span>
-              <span class="stat-box-value">${job.location}</span>
+              <span class="stat-box-value">${this.escapeHtml(job.location || '')}</span>
             </div>
             <div class="stat-box">
               <span class="stat-box-label">Educational Qualification</span>
-              <span class="stat-box-value">${job.qualification}</span>
+              <span class="stat-box-value">${this.escapeHtml(job.qualification || '')}</span>
             </div>
           </div>
 
           <!-- Overview / Description -->
           <div class="detail-section">
             <h2 class="detail-section-title">Overview & Recruitment Description</h2>
-            <p class="detail-text-content">${job.jobDesc}</p>
+            <p class="detail-text-content">${this.escapeHtml(job.jobDesc || '')}</p>
           </div>
 
           <!-- Important Dates -->
           <div class="detail-section">
             <h2 class="detail-section-title">Important Dates</h2>
             <div class="detail-text-content">
-              • Notification Released: ${job.postedDate}
-              • Online Application Begins: ${job.appStartDate}
-              • Last Date for Online Submission & Fee: ${job.lastDate}
-              • Tentative Examination / Admit Card Schedule: ${job.examDate}
+              • Notification Released: ${this.escapeHtml(job.postedDate || '')}
+              • Online Application Begins: ${this.escapeHtml(job.appStartDate || '')}
+              • Last Date for Online Submission & Fee: ${this.escapeHtml(job.lastDate || '')}
+              • Tentative Examination / Admit Card Schedule: ${this.escapeHtml(job.examDate || '')}
             </div>
           </div>
 
           <!-- Eligibility Criteria & Qualification -->
           <div class="detail-section">
             <h2 class="detail-section-title">Eligibility Criteria & Educational Qualification</h2>
-            <p class="detail-text-content">Candidates must possess <strong>${job.qualification}</strong> from a recognized State/Central Board, University or Institute as on the prescribed cut-off date.</p>
+            <p class="detail-text-content">Candidates must possess <strong>${this.escapeHtml(job.qualification || '')}</strong> from a recognized State/Central Board, University or Institute as on the prescribed cut-off date.</p>
           </div>
 
           <!-- Age Limit -->
           <div class="detail-section">
             <h2 class="detail-section-title">Age Limit & Relaxations</h2>
-            <p class="detail-text-content">${job.ageLimit}</p>
+            <p class="detail-text-content">${this.escapeHtml(job.ageLimit || '')}</p>
           </div>
 
           <!-- Application Fee -->
           <div class="detail-section">
             <h2 class="detail-section-title">Application Fee & Payment Mode</h2>
-            <p class="detail-text-content">${job.appFee}</p>
+            <p class="detail-text-content">${this.escapeHtml(job.appFee || '')}</p>
           </div>
 
           <!-- Selection Process -->
           <div class="detail-section">
             <h2 class="detail-section-title">Selection Process</h2>
-            <p class="detail-text-content">${job.selectionProcess}</p>
+            <p class="detail-text-content">${this.escapeHtml(job.selectionProcess || '')}</p>
           </div>
 
           <!-- Salary / Pay Scale -->
           <div class="detail-section">
             <h2 class="detail-section-title">Salary & Pay Scale</h2>
-            <p class="detail-text-content">Selected candidates will be placed in Pay Scale: <strong>${job.salary}</strong> along with admissible allowances as per organization norms.</p>
+            <p class="detail-text-content">Selected candidates will be placed in Pay Scale: <strong>${this.escapeHtml(job.salary || '')}</strong> along with admissible allowances as per organization norms.</p>
           </div>
 
           <!-- Documents Required (Only displays documents configured for this job!) -->
@@ -1067,22 +1161,22 @@ class JobKhojApp {
             </p>
 
             <div class="links-grid">
-              <a href="${job.officialNotifUrl}" target="_blank" rel="noopener noreferrer" class="official-action-link link-notif">
+              <a href="${this.escapeHtml(job.officialNotifUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-notif">
                 ${Icons.file}
                 <span>OFFICIAL NOTIFICATION</span>
               </a>
 
-              <a href="${job.officialWebsiteUrl}" target="_blank" rel="noopener noreferrer" class="official-action-link link-website">
+              <a href="${this.escapeHtml(job.officialWebsiteUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-website">
                 ${Icons.external}
                 <span>OFFICIAL WEBSITE</span>
               </a>
 
-              <a href="${job.applyUrl}" target="_blank" rel="noopener noreferrer" class="official-action-link link-apply" id="detail-apply-btn">
+              <a href="${this.escapeHtml(job.applyUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-apply" id="detail-apply-btn">
                 <span>APPLY ONLINE NOW ↗</span>
               </a>
 
               ${settings.enableWhatsappApplyGlobal && job.whatsappApplyEnabled ? `
-                <a href="${waApplyUrl}" target="_blank" rel="noopener noreferrer" class="official-action-link link-whatsapp-apply" id="detail-whatsapp-apply-btn">
+                <a href="${this.escapeHtml(waApplyUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-whatsapp-apply" id="detail-whatsapp-apply-btn">
                   ${Icons.whatsapp}
                   <span>WHATSAPP APPLY / INQUIRE</span>
                 </a>
@@ -1100,11 +1194,11 @@ class JobKhojApp {
 
     // Track Apply click
     document.getElementById('detail-apply-btn')?.addEventListener('click', () => {
-      JobKhojDataStore.incrementStat('applyClicks', `Official Apply clicked for ${job.title}`);
+      JobKhojDataStore.incrementStat('applyClicks', `Official Apply clicked for ${this.escapeHtml(job.title || '')}`);
     });
 
     document.getElementById('detail-whatsapp-apply-btn')?.addEventListener('click', () => {
-      JobKhojDataStore.incrementStat('whatsappClicks', `WhatsApp Apply initiated for ${job.title}`);
+      JobKhojDataStore.incrementStat('whatsappClicks', `WhatsApp Apply initiated for ${this.escapeHtml(job.title || '')}`);
     });
   }
 
@@ -1130,31 +1224,31 @@ class JobKhojApp {
               <div class="job-card-header">
                 <div class="job-card-title-group">
                   <span class="job-category-badge" style="background:#E9F4FF;color:#0066CC;">COMMISSION EXAM</span>
-                  <h3 class="job-card-title">${ex.examName}</h3>
-                  <div class="job-card-org">${ex.org}</div>
+                  <h3 class="job-card-title">${this.escapeHtml(ex.examName || '')}</h3>
+                  <div class="job-card-org">${this.escapeHtml(ex.org || '')}</div>
                 </div>
               </div>
 
               <div class="job-meta-grid" style="grid-template-columns: repeat(3, 1fr);">
                 <div class="job-meta-item">
                   <span class="job-meta-label">Exam Date</span>
-                  <span class="job-meta-val" style="color:var(--orange);">${ex.examDate}</span>
+                  <span class="job-meta-val" style="color:var(--orange);">${this.escapeHtml(ex.examDate || '')}</span>
                 </div>
                 <div class="job-meta-item">
                   <span class="job-meta-label">Application Last Date</span>
-                  <span class="job-meta-val">${ex.lastDate}</span>
+                  <span class="job-meta-val">${this.escapeHtml(ex.lastDate || '')}</span>
                 </div>
                 <div class="job-meta-item">
                   <span class="job-meta-label">Eligibility</span>
-                  <span class="job-meta-val">${ex.eligibility}</span>
+                  <span class="job-meta-val">${this.escapeHtml(ex.eligibility || '')}</span>
                 </div>
               </div>
 
-              <p style="font-size:14px;color:#4A5568;line-height:1.6;margin-bottom:16px;">${ex.details}</p>
+              <p style="font-size:14px;color:#4A5568;line-height:1.6;margin-bottom:16px;">${this.escapeHtml(ex.details || '')}</p>
 
               <div class="job-card-footer">
                 <span>Official Exam Portal</span>
-                <a href="${ex.officialUrl}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
+                <a href="${this.escapeHtml(ex.officialUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
                   EXAM DETAILS & PORTAL ↗
                 </a>
               </div>
@@ -1206,10 +1300,10 @@ class JobKhojApp {
               <div class="job-card-footer">
                 <span>Result Declaration Date: <strong>${res.resultDate}</strong></span>
                 <div class="flex gap-2">
-                  <a href="${res.officialWebsite}" target="_blank" rel="noopener noreferrer" class="btn-view-details">
+                  <a href="${this.escapeHtml(res.officialWebsite || "")}" target="_blank" rel="noopener noreferrer" class="btn-view-details">
                     Official Website
                   </a>
-                  <a href="${res.resultUrl}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
+                  <a href="${this.escapeHtml(res.resultUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
                     VIEW RESULT / SCORECARD ↗
                   </a>
                 </div>
@@ -1249,8 +1343,8 @@ class JobKhojApp {
               <div class="job-card-header">
                 <div>
                   <span class="job-category-badge badge-railway">HALL TICKET</span>
-                  <h3 class="job-card-title">${c.examName}</h3>
-                  <div class="job-card-org">${c.org}</div>
+                  <h3 class="job-card-title">${this.escapeHtml(c.examName || '')}</h3>
+                  <div class="job-card-org">${this.escapeHtml(c.org || '')}</div>
                 </div>
                 <span class="job-status-badge status-active">AVAILABLE</span>
               </div>
@@ -1258,19 +1352,19 @@ class JobKhojApp {
               <div class="job-meta-grid" style="grid-template-columns: repeat(2, 1fr);">
                 <div class="job-meta-item">
                   <span class="job-meta-label">Release Date</span>
-                  <span class="job-meta-val">${c.releaseDate}</span>
+                  <span class="job-meta-val">${this.escapeHtml(c.releaseDate || '')}</span>
                 </div>
                 <div class="job-meta-item">
                   <span class="job-meta-label">Scheduled Exam Date</span>
-                  <span class="job-meta-val" style="color:var(--orange);">${c.examDate}</span>
+                  <span class="job-meta-val" style="color:var(--orange);">${this.escapeHtml(c.examDate || '')}</span>
                 </div>
               </div>
 
-              <p style="font-size:14px;color:#334155;line-height:1.6;margin-bottom:16px;">${c.description}</p>
+              <p style="font-size:14px;color:#334155;line-height:1.6;margin-bottom:16px;">${this.escapeHtml(c.description || '')}</p>
 
               <div class="job-card-footer">
                 <span>Carry valid original Govt ID (Aadhaar/PAN/Voter ID) to the examination center.</span>
-                <a href="${c.downloadUrl}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
+                <a href="${this.escapeHtml(c.downloadUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
                   DOWNLOAD ADMIT CARD ↗
                 </a>
               </div>
@@ -1306,14 +1400,14 @@ class JobKhojApp {
         <div class="blog-grid">
           ${articles.length > 0 ? articles.map(art => `
             <article class="blog-card">
-              <img src="${art.featuredImage}" alt="${art.title}" class="blog-card-img" loading="lazy">
+              <img src="${this.escapeHtml(art.featuredImage || "")}" alt="${this.escapeHtml(art.title || '')}" class="blog-card-img" loading="lazy">
               <div class="blog-card-body">
-                <span class="blog-category-tag">${art.category}</span>
-                <h3 class="blog-card-title" data-art-slug="${art.slug || art.id}">${art.title}</h3>
-                <p class="blog-card-excerpt">${art.excerpt}</p>
+                <span class="blog-category-tag">${this.escapeHtml(art.category || '')}</span>
+                <h3 class="blog-card-title" data-art-slug="${this.escapeHtml(art.slug || art.id)}">${this.escapeHtml(art.title || '')}</h3>
+                <p class="blog-card-excerpt">${this.escapeHtml(art.excerpt || '')}</p>
                 <div class="blog-card-footer">
-                  <span>${art.publishedDate}</span>
-                  <a href="#article/${art.slug || art.id}" class="view-all-link">Read More →</a>
+                  <span>${this.escapeHtml(art.publishedDate || '')}</span>
+                  <a href="/article/${encodeURIComponent(art.slug || art.id)}" class="view-all-link">Read More →</a>
                 </div>
               </div>
             </article>
@@ -1331,7 +1425,7 @@ class JobKhojApp {
     document.querySelectorAll('.blog-card-title').forEach(el => {
       el.addEventListener('click', () => {
         const slug = el.getAttribute('data-art-slug');
-        if (slug) window.location.hash = `#article/${slug}`;
+        if (slug) { history.pushState({}, '', `/article/${encodeURIComponent(slug)}`); void this.handleRouting(); }
       });
     });
   }
@@ -1341,7 +1435,7 @@ class JobKhojApp {
     if (!main) return;
 
     const articles = JobKhojDataStore.getBlog();
-    const article = articles.find(a => a.slug === slugOrId || a.id === slugOrId) || (articles.length > 0 ? articles[0] : null);
+    const article = articles.find(a => a.slug === slugOrId || a.id === slugOrId) || null;
     if (!article) {
       main.innerHTML = `
         <div class="container section-padding" style="max-width: 860px;">
@@ -1350,7 +1444,7 @@ class JobKhojApp {
             <h3 class="empty-state-title">Article Not Found</h3>
             <p class="empty-state-sub">The requested career article or study guide could not be found.</p>
             <div style="margin-top:16px;">
-              <a href="#blog" class="btn-view-details">Browse All Articles</a>
+              <a href="/blog" class="btn-view-details">Browse All Articles</a>
             </div>
           </div>
         </div>
@@ -1361,27 +1455,27 @@ class JobKhojApp {
     main.innerHTML = `
       <div class="container" style="padding-top: 24px; padding-bottom: 64px; max-width: 860px;">
         <nav class="breadcrumb-nav">
-          <a href="#home">Home</a>
+          <a href="/">Home</a>
           <span class="breadcrumb-separator">›</span>
-          <a href="#blog">Blog</a>
+          <a href="/blog">Blog</a>
           <span class="breadcrumb-separator">›</span>
-          <span>${article.title}</span>
+          <span>${this.escapeHtml(article.title || '')}</span>
         </nav>
 
         <article class="job-detail-card">
-          <span class="blog-category-tag" style="font-size:12px;">${article.category}</span>
-          <h1 class="detail-job-title" style="margin-top:6px; margin-bottom:12px;">${article.title}</h1>
+          <span class="blog-category-tag" style="font-size:12px;">${this.escapeHtml(article.category || '')}</span>
+          <h1 class="detail-job-title" style="margin-top:6px; margin-bottom:12px;">${this.escapeHtml(article.title || '')}</h1>
 
           <div class="flex items-center gap-4" style="font-size:13px; color:var(--muted); margin-bottom:24px;">
-            <span>By <strong>${article.author}</strong></span>
+            <span>By <strong>${this.escapeHtml(article.author || '')}</strong></span>
             <span>•</span>
-            <span>Published: <strong>${article.publishedDate}</strong></span>
+            <span>Published: <strong>${this.escapeHtml(article.publishedDate || '')}</strong></span>
           </div>
 
-          <img src="${article.featuredImage}" alt="${article.title}" style="width:100%; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;">
+          <img src="${this.escapeHtml(article.featuredImage || "")}" alt="${this.escapeHtml(article.title || '')}" style="width:100%; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;">
 
           <div class="detail-text-content" style="font-size:16px; line-height:1.8;">
-            ${article.content}
+            ${this.sanitizeAdHtml(article.content || '')}
           </div>
 
           <div class="important-links-box" style="margin-top:40px;">
@@ -1391,7 +1485,7 @@ class JobKhojApp {
             <p style="font-size:13.5px; color:var(--muted); margin-bottom:14px;">
               Explore over 1,50,000+ verified active vacancies across Government, Banking, Railways, and Private sectors.
             </p>
-            <a href="#jobs" class="ad-action-btn" style="display:inline-block;">EXPLORE ALL JOBS →</a>
+            <a href="/jobs" class="ad-action-btn" style="display:inline-block;">EXPLORE ALL JOBS →</a>
           </div>
         </article>
       </div>
@@ -1448,7 +1542,7 @@ class JobKhojApp {
               <h1 style="font-size:22px;font-weight:900;color:var(--navy);">Search Results for "${query}"</h1>
               <span style="font-size:13.5px;color:var(--muted);">${totalMatches} total match${totalMatches === 1 ? '' : 'es'} across all recruitment updates</span>
             </div>
-            <a href="#home" class="btn-view-details">New Search</a>
+            <a href="/" class="btn-view-details">New Search</a>
           </div>
 
           ${totalMatches === 0 ? `
@@ -1479,7 +1573,7 @@ class JobKhojApp {
                     <h3 class="job-card-title">${e.examName}</h3>
                     <div class="job-card-org">${e.org} • Exam Date: ${e.examDate}</div>
                     <p style="font-size:13.5px;color:#4A5568;margin:10px 0;">${e.details}</p>
-                    <a href="${e.officialUrl}" target="_blank" rel="noopener noreferrer" class="btn-apply-now" style="display:inline-block;">EXAM PORTAL ↗</a>
+                    <a href="${this.escapeHtml(e.officialUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now" style="display:inline-block;">EXAM PORTAL ↗</a>
                   </div>
                 `).join('')}
               </div>
@@ -1494,9 +1588,9 @@ class JobKhojApp {
                     <div class="item-row-list" style="margin-top:14px;">
                       ${results.map(r => `
                         <div class="item-row">
-                          <div class="item-row-title">${r.resultTitle}</div>
-                          <div class="item-row-org">${r.org}</div>
-                          <a href="${r.resultUrl}" target="_blank" class="btn-item-action" style="align-self:flex-start;margin-top:6px;">View Result ↗</a>
+                          <div class="item-row-title">${this.escapeHtml(r.resultTitle || '')}</div>
+                          <div class="item-row-org">${this.escapeHtml(r.org || '')}</div>
+                          <a href="${this.escapeHtml(r.resultUrl || "")}" target="_blank" class="btn-item-action" style="align-self:flex-start;margin-top:6px;">View Result ↗</a>
                         </div>
                       `).join('')}
                     </div>
@@ -1511,7 +1605,7 @@ class JobKhojApp {
                         <div class="item-row">
                           <div class="item-row-title">${a.examName}</div>
                           <div class="item-row-org">${a.org} • Exam: ${a.examDate}</div>
-                          <a href="${a.downloadUrl}" target="_blank" class="btn-item-action" style="align-self:flex-start;margin-top:6px;">Download ↗</a>
+                          <a href="${this.escapeHtml(a.downloadUrl || "")}" target="_blank" class="btn-item-action" style="align-self:flex-start;margin-top:6px;">Download ↗</a>
                         </div>
                       `).join('')}
                     </div>
@@ -1568,7 +1662,7 @@ class JobKhojApp {
             <button type="submit" class="btn-admin-submit">LOG IN TO DASHBOARD</button>
 
             <div style="margin-top:20px;text-align:center;">
-              <a href="#home" style="font-size:13px;color:#94A3B8;">← Return to Public Website</a>
+              <a href="/" style="font-size:13px;color:#94A3B8;">← Return to Public Website</a>
             </div>
           </form>
         </div>
@@ -1595,24 +1689,21 @@ class JobKhojApp {
           return;
         }
 
-        const { data: adminUser, error: adminError } = await supabase
+        let { data: adminUser, error: adminError } = await supabase
           .from('admin_users')
-          .select('user_id')
+          .select('user_id, role')
           .eq('user_id', data.user.id)
           .maybeSingle();
 
         if (adminError || !adminUser) {
           await supabase.auth.signOut();
-          if (errEl) {
-            errEl.style.display = 'block';
-            errEl.textContent = 'You are authenticated, but you are not authorized to access the Admin Panel.';
-          }
+          if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'You are authenticated, but you are not authorized to access the Admin Panel.'; }
           return;
         }
-
-        JobKhojDataStore.setAdminLoggedIn(true);
+        JobKhojDataStore.setAdminLoggedIn(true, adminUser.role);
+        await JobKhojDataStore.loadAll();
         this.showToast('Successfully authenticated as Administrator');
-        window.location.hash = '#admin/overview';
+        history.pushState({}, '', '/admin/overview'); this.handleRouting();
       } catch (error) {
         console.error('Admin login failed:', error);
         if (errEl) {
@@ -1651,7 +1742,7 @@ class JobKhojApp {
           </div>
 
           <div class="admin-top-actions">
-            <a href="#home" class="btn-admin-public">
+            <a href="/" class="btn-admin-public">
               ${Icons.external}
               <span>Visit Public Site</span>
             </a>
@@ -1758,7 +1849,7 @@ class JobKhojApp {
       item.addEventListener('click', () => {
         const tab = item.getAttribute('data-tab');
         if (tab) {
-          window.location.hash = `#admin/${tab}`;
+          history.pushState({}, '', `/admin/${encodeURIComponent(tab)}`); void this.handleRouting();
         }
       });
     });
@@ -1768,7 +1859,7 @@ class JobKhojApp {
       await supabase.auth.signOut();
       JobKhojDataStore.setAdminLoggedIn(false);
       this.showToast('Logged out of admin panel');
-      window.location.hash = '#home';
+      history.pushState({}, '', '/'); void this.handleRouting();
     });
 
     // Render active tab view
@@ -1926,12 +2017,12 @@ class JobKhojApp {
               ${jobs.length > 0 ? jobs.map(job => `
                 <tr>
                   <td>
-                    <div class="admin-table-title">${job.title}</div>
-                    <div class="admin-table-sub">${job.org}</div>
+                    <div class="admin-table-title">${this.escapeHtml(job.title || '')}</div>
+                    <div class="admin-table-sub">${this.escapeHtml(job.org || '')}</div>
                   </td>
-                  <td><span class="job-category-badge badge-${job.category.toLowerCase()}">${job.category}</span></td>
-                  <td><strong>${job.vacancies}</strong></td>
-                  <td>${job.lastDate}</td>
+                  <td><span class="job-category-badge badge-${/^(Government|Private|Bank|Railway|Teaching|Defence|Police|Apprentice)$/.test(job.category) ? job.category.toLowerCase() : 'government'}">${this.escapeHtml(job.category || '')}</span></td>
+                  <td><strong>${this.escapeHtml(job.vacancies || '')}</strong></td>
+                  <td>${this.escapeHtml(job.lastDate || '')}</td>
                   <td>
                     <span class="job-status-badge ${job.published ? 'status-active' : 'status-expired'}">
                       ${job.published ? 'PUBLISHED' : 'DRAFT'}
@@ -1939,12 +2030,12 @@ class JobKhojApp {
                   </td>
                   <td>
                     <div class="admin-actions-cell">
-                      <button class="btn-table-action job-edit-btn" data-id="${job.id}">Edit</button>
-                      <button class="btn-table-action job-duplicate-btn" data-id="${job.id}">Duplicate</button>
-                      <button class="btn-table-action job-toggle-btn" data-id="${job.id}">
+                      <button class="btn-table-action job-edit-btn" data-id="${this.escapeHtml(job.id)}">Edit</button>
+                      <button class="btn-table-action job-duplicate-btn" data-id="${this.escapeHtml(job.id)}">Duplicate</button>
+                      <button class="btn-table-action job-toggle-btn" data-id="${this.escapeHtml(job.id)}">
                         ${job.published ? 'Unpublish' : 'Publish'}
                       </button>
-                      <button class="btn-table-action btn-table-delete job-delete-btn" data-id="${job.id}">Delete</button>
+                      <button class="btn-table-action btn-table-delete job-delete-btn" data-id="${this.escapeHtml(job.id)}">Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -1962,58 +2053,63 @@ class JobKhojApp {
     `;
 
     // Bind Create Job Button
-    document.getElementById('admin-create-job-btn')?.addEventListener('click', () => {
+    document.getElementById('admin-create-job-btn')?.addEventListener('click', () => { if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
       this.openJobModal(null);
     });
 
+    if (!JobKhojDataStore.canWrite()) { document.querySelectorAll<HTMLButtonElement>('.job-edit-btn,.job-duplicate-btn,.job-toggle-btn,.job-delete-btn').forEach(b => { b.disabled = true; b.title = 'Editor permission required'; }); }
+
     // Actions
     document.querySelectorAll('.job-edit-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
+        if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
         const id = btn.getAttribute('data-id');
         const item = jobs.find(j => j.id === id);
         if (item) this.openJobModal(item);
       });
     });
 
-    document.querySelectorAll('.job-duplicate-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+    document.querySelectorAll('.job-duplicate-btn').forEach(async btn => {
+      btn.addEventListener('click', async () => {
+        if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
         const id = btn.getAttribute('data-id');
         const item = jobs.find(j => j.id === id);
         if (item) {
           const clone: JobItem = {
             ...item,
-            id: 'jk-' + Date.now(),
+            id: crypto.randomUUID(),
             title: `${item.title} (Copy)`,
             slug: `${item.slug}-copy`,
             published: false
           };
           jobs.unshift(clone);
-          JobKhojDataStore.saveJobs(jobs);
+          try { await JobKhojDataStore.saveJob(clone); } catch (error) { this.showToast(error instanceof Error ? error.message : 'Unable to duplicate job', false); return; }
           this.showToast('Job recruitment duplicated as draft');
           this.renderAdminJobs(container);
         }
       });
     });
 
-    document.querySelectorAll('.job-toggle-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+    document.querySelectorAll('.job-toggle-btn').forEach(async btn => {
+      btn.addEventListener('click', async () => {
+        if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
         const id = btn.getAttribute('data-id');
         const item = jobs.find(j => j.id === id);
         if (item) {
           item.published = !item.published;
-          JobKhojDataStore.saveJobs(jobs);
+          try { await JobKhojDataStore.setPublished('jobs', item.id, item.published); } catch (error) { this.showToast(error instanceof Error ? error.message : 'Unable to update publication status', false); return; }
           this.showToast(`Job ${item.published ? 'published' : 'unpublished'}`);
           this.renderAdminJobs(container);
         }
       });
     });
 
-    document.querySelectorAll('.job-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+    document.querySelectorAll('.job-delete-btn').forEach(async btn => {
+      btn.addEventListener('click', async () => {
+        if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
         const id = btn.getAttribute('data-id');
         if (confirm('Are you sure you want to delete this job recruitment?')) {
-          const updated = jobs.filter(j => j.id !== id);
-          JobKhojDataStore.saveJobs(updated);
+          try { await JobKhojDataStore.deleteContent('jobs', id!); } catch (error) { this.showToast(error instanceof Error ? error.message : 'Unable to delete job', false); return; }
           this.showToast('Job recruitment deleted');
           this.renderAdminJobs(container);
         }
@@ -2049,13 +2145,13 @@ class JobKhojApp {
             <div class="admin-form-section-title">1. Basic Information</div>
             <div class="admin-form-group">
               <label class="admin-form-label">Job Title *</label>
-              <input type="text" id="m-title" class="admin-form-input" required value="${existing?.title || ''}">
+              <input type="text" id="m-title" class="admin-form-input" required value="${this.escapeHtml(existing?.title || '')}">
             </div>
 
             <div class="admin-form-row">
               <div class="admin-form-group">
                 <label class="admin-form-label">Organization *</label>
-                <input type="text" id="m-org" class="admin-form-input" required value="${existing?.org || ''}">
+                <input type="text" id="m-org" class="admin-form-input" required value="${this.escapeHtml(existing?.org || '')}">
               </div>
 
               <div class="admin-form-group">
@@ -2070,6 +2166,10 @@ class JobKhojApp {
 
             <div class="admin-form-row">
               <div class="admin-form-group">
+                <label class="admin-form-label">Post / Designation</label>
+                <input type="text" id="m-post" class="admin-form-input" placeholder="e.g. Assistant Section Officer" value="${this.escapeHtml(existing?.post || '')}">
+              </div>
+              <div class="admin-form-group">
                 <label class="admin-form-label">Job Type</label>
                 <select id="m-jobType" class="admin-form-select">
                   ${['Permanent', 'Contractual', 'Apprentice', 'Full Time'].map(t => `
@@ -2080,31 +2180,31 @@ class JobKhojApp {
 
               <div class="admin-form-group">
                 <label class="admin-form-label">Total Vacancies *</label>
-                <input type="text" id="m-vacancies" class="admin-form-input" required placeholder="e.g. 5,420 Posts" value="${existing?.vacancies || ''}">
+                <input type="text" id="m-vacancies" class="admin-form-input" required placeholder="e.g. 5,420 Posts" value="${this.escapeHtml(existing?.vacancies || '')}">
               </div>
             </div>
 
             <div class="admin-form-row">
               <div class="admin-form-group">
                 <label class="admin-form-label">Qualification *</label>
-                <input type="text" id="m-qual" class="admin-form-input" required placeholder="e.g. 10th Pass / Graduate" value="${existing?.qualification || ''}">
+                <input type="text" id="m-qual" class="admin-form-input" required placeholder="e.g. 10th Pass / Graduate" value="${this.escapeHtml(existing?.qualification || '')}">
               </div>
 
               <div class="admin-form-group">
                 <label class="admin-form-label">Location *</label>
-                <input type="text" id="m-location" class="admin-form-input" required placeholder="e.g. All India / Delhi" value="${existing?.location || ''}">
+                <input type="text" id="m-location" class="admin-form-input" required placeholder="e.g. All India / Delhi" value="${this.escapeHtml(existing?.location || '')}">
               </div>
             </div>
 
             <div class="admin-form-row">
               <div class="admin-form-group">
                 <label class="admin-form-label">Salary / Pay Scale</label>
-                <input type="text" id="m-salary" class="admin-form-input" value="${existing?.salary || ''}">
+                <input type="text" id="m-salary" class="admin-form-input" value="${this.escapeHtml(existing?.salary || '')}">
               </div>
 
               <div class="admin-form-group">
                 <label class="admin-form-label">Age Limit</label>
-                <input type="text" id="m-age" class="admin-form-input" value="${existing?.ageLimit || ''}">
+                <input type="text" id="m-age" class="admin-form-input" value="${this.escapeHtml(existing?.ageLimit || '')}">
               </div>
             </div>
 
@@ -2217,7 +2317,8 @@ class JobKhojApp {
       }
     });
 
-    const saveForm = (publishedState: boolean) => {
+    const saveForm = async (publishedState: boolean) => {
+      if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
       const selectedDocs: string[] = [];
       document.querySelectorAll<HTMLInputElement>('input[name="m-docs"]:checked').forEach(cb => {
         selectedDocs.push(cb.value);
@@ -2236,9 +2337,10 @@ class JobKhojApp {
       }
 
       const item: JobItem = {
-        id: existing ? existing.id : 'jk-' + Date.now(),
+        id: existing ? existing.id : crypto.randomUUID(),
         title,
         org,
+        post: (document.getElementById('m-post') as HTMLInputElement).value.trim(),
         category: (document.getElementById('m-category') as HTMLSelectElement).value as any,
         jobType: (document.getElementById('m-jobType') as HTMLSelectElement).value as any,
         vacancies: (document.getElementById('m-vacancies') as HTMLInputElement).value.trim() || 'Various Posts',
@@ -2246,7 +2348,7 @@ class JobKhojApp {
         location: (document.getElementById('m-location') as HTMLInputElement).value.trim(),
         salary: (document.getElementById('m-salary') as HTMLInputElement).value.trim() || 'As per norms',
         ageLimit: (document.getElementById('m-age') as HTMLInputElement).value.trim() || 'As per rules',
-        appStartDate: (document.getElementById('m-start') as HTMLInputElement).value.trim() || 'Active',
+        appStartDate: (document.getElementById('m-start') as HTMLInputElement).value.trim(),
         lastDate: (document.getElementById('m-last') as HTMLInputElement).value.trim(),
         examDate: (document.getElementById('m-exam') as HTMLInputElement).value.trim() || 'To be announced',
         appFee: (document.getElementById('m-fee') as HTMLInputElement).value.trim() || 'Refer notification',
@@ -2261,7 +2363,7 @@ class JobKhojApp {
         published: publishedState,
         slug,
         postedDate: existing ? existing.postedDate : `${new Date().getDate()} ${new Date().toLocaleString('default', { month: 'short' })} ${new Date().getFullYear()}`,
-        status: 'Active'
+        status: existing?.status || 'Active'
       };
 
       const jobs = JobKhojDataStore.getJobs();
@@ -2272,17 +2374,17 @@ class JobKhojApp {
         jobs.unshift(item);
       }
 
-      JobKhojDataStore.saveJobs(jobs);
+      await JobKhojDataStore.saveJob(item);
       this.showToast(`Job recruitment ${publishedState ? 'published' : 'saved as draft'}`);
       closeModal();
       const main = document.getElementById('admin-main-view');
       if (main) this.renderAdminJobs(main);
     };
 
-    document.getElementById('job-modal-save-draft')?.addEventListener('click', () => saveForm(false));
-    document.getElementById('job-modal-form')?.addEventListener('submit', (e) => {
+    document.getElementById('job-modal-save-draft')?.addEventListener('click', () => { void saveForm(false).catch(error => this.showToast(error instanceof Error ? error.message : 'Unable to save job', false)); });
+    document.getElementById('job-modal-form')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      saveForm(true);
+      try { await saveForm(true); } catch (error) { console.error(error); this.showToast(error instanceof Error ? error.message : 'Unable to save job', false); }
     });
   }
 
@@ -2312,10 +2414,10 @@ class JobKhojApp {
                   <td>${this.escapeHtml(ex.lastDate)}</td>
                   <td><span class="job-status-badge ${ex.published ? 'status-active' : 'status-expired'}">${ex.published ? 'PUBLISHED' : 'DRAFT'}</span></td>
                   <td><div class="admin-actions-cell">
-                    <button class="btn-table-action exam-edit-btn" data-id="${ex.id}">Edit</button>
-                    <button class="btn-table-action exam-duplicate-btn" data-id="${ex.id}">Duplicate</button>
-                    <button class="btn-table-action exam-toggle-btn" data-id="${ex.id}">${ex.published ? 'Unpublish' : 'Publish'}</button>
-                    <button class="btn-table-action btn-table-delete exam-delete-btn" data-id="${ex.id}">Delete</button>
+                    <button class="btn-table-action exam-edit-btn" data-id="${this.escapeHtml(ex.id || "")}">Edit</button>
+                    <button class="btn-table-action exam-duplicate-btn" data-id="${this.escapeHtml(ex.id || "")}">Duplicate</button>
+                    <button class="btn-table-action exam-toggle-btn" data-id="${this.escapeHtml(ex.id || "")}">${ex.published ? 'Unpublish' : 'Publish'}</button>
+                    <button class="btn-table-action btn-table-delete exam-delete-btn" data-id="${this.escapeHtml(ex.id || "")}">Delete</button>
                   </div></td>
                 </tr>`).join('') : `
                 <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No competitive exams created yet. Click <strong>+ CREATE NEW EXAM</strong> to add one.</td></tr>`}
@@ -2328,19 +2430,19 @@ class JobKhojApp {
     document.querySelectorAll('.exam-edit-btn').forEach(btn => btn.addEventListener('click', () => {
       const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (item) this.openExamModal(item);
     }));
-    document.querySelectorAll('.exam-duplicate-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.exam-duplicate-btn').forEach(btn => btn.addEventListener('click', async () => { if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
       const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (!item) return;
-      exams.unshift({...item, id:'ex-'+Date.now(), examName:`${item.examName} (Copy)`, published:false});
-      JobKhojDataStore.saveExams(exams); this.showToast('Exam duplicated as draft'); this.renderAdminExams(container);
+      const copy={...item, id:crypto.randomUUID(), examName:`${item.examName} (Copy)`, published:false};
+      await JobKhojDataStore.saveExam(copy); this.showToast('Exam duplicated as draft'); this.renderAdminExams(container);
     }));
-    document.querySelectorAll('.exam-toggle-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.exam-toggle-btn').forEach(btn => btn.addEventListener('click', async () => { if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
       const item = exams.find(x => x.id === btn.getAttribute('data-id')); if (!item) return;
-      item.published=!item.published; JobKhojDataStore.saveExams(exams);
+      item.published=!item.published; await JobKhojDataStore.setPublished('exams', item.id, item.published);
       this.showToast(`Exam ${item.published ? 'published' : 'unpublished'}`); this.renderAdminExams(container);
     }));
-    document.querySelectorAll('.exam-delete-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.exam-delete-btn').forEach(btn => btn.addEventListener('click', async () => { if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }
       if (!confirm('Are you sure you want to delete this competitive exam?')) return;
-      JobKhojDataStore.saveExams(exams.filter(x => x.id !== btn.getAttribute('data-id')));
+      await JobKhojDataStore.deleteContent('exams', btn.getAttribute('data-id') || '');
       this.showToast('Exam deleted'); this.renderAdminExams(container);
     }));
   }
@@ -2362,17 +2464,18 @@ class JobKhojApp {
       </form></div></div>`;
     root.querySelector('#content-modal-overlay')?.classList.add('open');
     const close=()=>root.innerHTML=''; document.getElementById('content-modal-close')?.addEventListener('click',close); document.getElementById('content-modal-cancel')?.addEventListener('click',close);
-    const save=(published:boolean)=>{
+    const save=async (published:boolean)=>{
+      if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}
       const name=(document.getElementById('cm-name') as HTMLInputElement).value.trim(), org=(document.getElementById('cm-org') as HTMLInputElement).value.trim();
       if(!name||!org){alert('Please fill in Exam Name and Organization.');return;}
-      const item:ExamItem={id:existing?.id||'ex-'+Date.now(),examName:name,org,
+      const item:ExamItem={id:existing?.id||crypto.randomUUID(),examName:name,org,
         examDate:(document.getElementById('cm-exam-date') as HTMLInputElement).value.trim()||'To be announced',
         lastDate:(document.getElementById('cm-last-date') as HTMLInputElement).value.trim()||'To be announced',
         eligibility:(document.getElementById('cm-eligibility') as HTMLInputElement).value.trim(),
         details:(document.getElementById('cm-details') as HTMLTextAreaElement).value.trim(),
         officialUrl:(document.getElementById('cm-url') as HTMLInputElement).value.trim(),published};
       const all=JobKhojDataStore.getExams(); const i=all.findIndex(x=>x.id===item.id); if(i>=0) all[i]=item; else all.unshift(item);
-      JobKhojDataStore.saveExams(all); close(); this.showToast(`Exam ${published?'published':'saved as draft'}`);
+      await JobKhojDataStore.saveExam(item); close(); this.showToast(`Exam ${published?'published':'saved as draft'}`);
       const main=document.getElementById('admin-main-view'); if(main) this.renderAdminExams(main);
     };
     document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));
@@ -2384,13 +2487,13 @@ class JobKhojApp {
     const results = JobKhojDataStore.getResults();
     container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Results Announcements</h1><p class="admin-subheading">Total ${results.length} result announcements in database</p></div><button class="btn-admin-action-primary" id="admin-add-result-btn">${Icons.plus}<span>+ CREATE NEW RESULT</span></button></div>
       <div class="admin-table-container"><table class="admin-table"><thead><tr><th>RESULT TITLE & ORG</th><th>EXAM</th><th>RESULT DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
-      ${results.length?results.map(r=>`<tr><td><div class="admin-table-title">${this.escapeHtml(r.resultTitle)}</div><div class="admin-table-sub">${this.escapeHtml(r.org)}</div></td><td>${this.escapeHtml(r.exam)}</td><td>${this.escapeHtml(r.resultDate)}</td><td><span class="job-status-badge ${r.published?'status-active':'status-expired'}">${r.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action result-edit-btn" data-id="${r.id}">Edit</button><button class="btn-table-action result-duplicate-btn" data-id="${r.id}">Duplicate</button><button class="btn-table-action result-toggle-btn" data-id="${r.id}">${r.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete result-delete-btn" data-id="${r.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No result announcements created yet. Click <strong>+ CREATE NEW RESULT</strong> to add one.</td></tr>`}
+      ${results.length?results.map(r=>`<tr><td><div class="admin-table-title">${this.escapeHtml(r.resultTitle)}</div><div class="admin-table-sub">${this.escapeHtml(r.org)}</div></td><td>${this.escapeHtml(r.exam)}</td><td>${this.escapeHtml(r.resultDate)}</td><td><span class="job-status-badge ${r.published?'status-active':'status-expired'}">${r.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action result-edit-btn" data-id="${this.escapeHtml(r.id || "")}">Edit</button><button class="btn-table-action result-duplicate-btn" data-id="${this.escapeHtml(r.id || "")}">Duplicate</button><button class="btn-table-action result-toggle-btn" data-id="${this.escapeHtml(r.id || "")}">${r.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete result-delete-btn" data-id="${this.escapeHtml(r.id || "")}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No result announcements created yet. Click <strong>+ CREATE NEW RESULT</strong> to add one.</td></tr>`}
       </tbody></table></div></div>`;
     document.getElementById('admin-add-result-btn')?.addEventListener('click',()=>this.openResultModal(null));
     document.querySelectorAll('.result-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(x)this.openResultModal(x);}));
-    document.querySelectorAll('.result-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;results.unshift({...x,id:'res-'+Date.now(),resultTitle:`${x.resultTitle} (Copy)`,published:false});JobKhojDataStore.saveResults(results);this.showToast('Result duplicated as draft');this.renderAdminResults(container);}));
-    document.querySelectorAll('.result-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveResults(results);this.showToast(`Result ${x.published?'published':'unpublished'}`);this.renderAdminResults(container);}));
-    document.querySelectorAll('.result-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this result announcement?'))return;JobKhojDataStore.saveResults(results.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Result deleted');this.renderAdminResults(container);}));
+    document.querySelectorAll('.result-duplicate-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;const copy={...x,id:crypto.randomUUID(),resultTitle:`${x.resultTitle} (Copy)`,published:false};await JobKhojDataStore.saveResult(copy);this.showToast('Result duplicated as draft');this.renderAdminResults(container);}));
+    document.querySelectorAll('.result-toggle-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=results.find(r=>r.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;await JobKhojDataStore.setPublished('results', x.id, x.published);this.showToast(`Result ${x.published?'published':'unpublished'}`);this.renderAdminResults(container);}));
+    document.querySelectorAll('.result-delete-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }if(!confirm('Are you sure you want to delete this result announcement?'))return;await JobKhojDataStore.deleteContent('results', btn.getAttribute('data-id') || '');this.showToast('Result deleted');this.renderAdminResults(container);}));
   }
 
   private openResultModal(existing: ResultItem | null): void {
@@ -2406,7 +2509,7 @@ class JobKhojApp {
       <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH RESULT</button></div></form></div></div>`;
     root.querySelector('#content-modal-overlay')?.classList.add('open');
     const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
-    const save=(published:boolean)=>{const title=(document.getElementById('rm-title')as HTMLInputElement).value.trim(),org=(document.getElementById('rm-org')as HTMLInputElement).value.trim();if(!title||!org){alert('Please fill in Result Title and Organization.');return;}const item:ResultItem={id:existing?.id||'res-'+Date.now(),resultTitle:title,org,exam:(document.getElementById('rm-exam')as HTMLInputElement).value.trim(),resultDate:(document.getElementById('rm-date')as HTMLInputElement).value.trim()||'Today',description:(document.getElementById('rm-desc')as HTMLTextAreaElement).value.trim(),resultUrl:(document.getElementById('rm-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('rm-web')as HTMLInputElement).value.trim(),published,featured:existing?.featured??false};const all=JobKhojDataStore.getResults(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveResults(all);close();this.showToast(`Result ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminResults(main);};
+    const save=async (published:boolean)=>{if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}const title=(document.getElementById('rm-title')as HTMLInputElement).value.trim(),org=(document.getElementById('rm-org')as HTMLInputElement).value.trim();if(!title||!org){alert('Please fill in Result Title and Organization.');return;}const item:ResultItem={id:existing?.id||crypto.randomUUID(),resultTitle:title,org,exam:(document.getElementById('rm-exam')as HTMLInputElement).value.trim(),resultDate:(document.getElementById('rm-date')as HTMLInputElement).value.trim()||'Today',description:(document.getElementById('rm-desc')as HTMLTextAreaElement).value.trim(),resultUrl:(document.getElementById('rm-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('rm-web')as HTMLInputElement).value.trim(),published,featured:existing?.featured??false};const all=JobKhojDataStore.getResults(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);await JobKhojDataStore.saveResult(item);close();this.showToast(`Result ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminResults(main);};
     document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
@@ -2415,13 +2518,13 @@ class JobKhojApp {
     const cards=JobKhojDataStore.getAdmitCards();
     container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Admit Cards</h1><p class="admin-subheading">Total ${cards.length} admit card notifications in database</p></div><button class="btn-admin-action-primary" id="admin-add-admit-btn">${Icons.plus}<span>+ CREATE NEW ADMIT CARD</span></button></div>
       <div class="admin-table-container"><table class="admin-table"><thead><tr><th>EXAM NAME & ORG</th><th>RELEASE DATE</th><th>EXAM DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
-      ${cards.length?cards.map(c=>`<tr><td><div class="admin-table-title">${this.escapeHtml(c.examName)}</div><div class="admin-table-sub">${this.escapeHtml(c.org)}</div></td><td>${this.escapeHtml(c.releaseDate)}</td><td><strong>${this.escapeHtml(c.examDate)}</strong></td><td><span class="job-status-badge ${c.published?'status-active':'status-expired'}">${c.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action admit-edit-btn" data-id="${c.id}">Edit</button><button class="btn-table-action admit-duplicate-btn" data-id="${c.id}">Duplicate</button><button class="btn-table-action admit-toggle-btn" data-id="${c.id}">${c.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete admit-delete-btn" data-id="${c.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No admit cards created yet. Click <strong>+ CREATE NEW ADMIT CARD</strong> to add one.</td></tr>`}
+      ${cards.length?cards.map(c=>`<tr><td><div class="admin-table-title">${this.escapeHtml(c.examName)}</div><div class="admin-table-sub">${this.escapeHtml(c.org)}</div></td><td>${this.escapeHtml(c.releaseDate)}</td><td><strong>${this.escapeHtml(c.examDate)}</strong></td><td><span class="job-status-badge ${c.published?'status-active':'status-expired'}">${c.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action admit-edit-btn" data-id="${this.escapeHtml(c.id || "")}">Edit</button><button class="btn-table-action admit-duplicate-btn" data-id="${this.escapeHtml(c.id || "")}">Duplicate</button><button class="btn-table-action admit-toggle-btn" data-id="${this.escapeHtml(c.id || "")}">${c.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete admit-delete-btn" data-id="${this.escapeHtml(c.id || "")}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No admit cards created yet. Click <strong>+ CREATE NEW ADMIT CARD</strong> to add one.</td></tr>`}
       </tbody></table></div></div>`;
     document.getElementById('admin-add-admit-btn')?.addEventListener('click',()=>this.openAdmitModal(null));
     document.querySelectorAll('.admit-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(x)this.openAdmitModal(x);}));
-    document.querySelectorAll('.admit-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;cards.unshift({...x,id:'ac-'+Date.now(),examName:`${x.examName} (Copy)`,published:false});JobKhojDataStore.saveAdmitCards(cards);this.showToast('Admit card duplicated as draft');this.renderAdminAdmitCards(container);}));
-    document.querySelectorAll('.admit-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveAdmitCards(cards);this.showToast(`Admit card ${x.published?'published':'unpublished'}`);this.renderAdminAdmitCards(container);}));
-    document.querySelectorAll('.admit-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this admit card?'))return;JobKhojDataStore.saveAdmitCards(cards.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Admit card deleted');this.renderAdminAdmitCards(container);}));
+    document.querySelectorAll('.admit-duplicate-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;const copy={...x,id:crypto.randomUUID(),examName:`${x.examName} (Copy)`,published:false};await JobKhojDataStore.saveAdmitCard(copy);this.showToast('Admit card duplicated as draft');this.renderAdminAdmitCards(container);}));
+    document.querySelectorAll('.admit-toggle-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=cards.find(c=>c.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;await JobKhojDataStore.setPublished('admit_cards', x.id, x.published);this.showToast(`Admit card ${x.published?'published':'unpublished'}`);this.renderAdminAdmitCards(container);}));
+    document.querySelectorAll('.admit-delete-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }if(!confirm('Are you sure you want to delete this admit card?'))return;await JobKhojDataStore.deleteContent('admit_cards', btn.getAttribute('data-id') || '');this.showToast('Admit card deleted');this.renderAdminAdmitCards(container);}));
   }
 
   private openAdmitModal(existing: AdmitCardItem | null): void {
@@ -2437,7 +2540,7 @@ class JobKhojApp {
       <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH ADMIT CARD</button></div></form></div></div>`;
     root.querySelector('#content-modal-overlay')?.classList.add('open');
     const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
-    const save=(published:boolean)=>{const name=(document.getElementById('am-name')as HTMLInputElement).value.trim(),org=(document.getElementById('am-org')as HTMLInputElement).value.trim();if(!name||!org){alert('Please fill in Exam Name and Organization.');return;}const item:AdmitCardItem={id:existing?.id||'ac-'+Date.now(),examName:name,org,releaseDate:(document.getElementById('am-release')as HTMLInputElement).value.trim()||'To be announced',examDate:(document.getElementById('am-exam')as HTMLInputElement).value.trim()||'To be announced',downloadUrl:(document.getElementById('am-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('am-web')as HTMLInputElement).value.trim(),description:(document.getElementById('am-desc')as HTMLTextAreaElement).value.trim(),published};const all=JobKhojDataStore.getAdmitCards(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveAdmitCards(all);close();this.showToast(`Admit card ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminAdmitCards(main);};
+    const save=async (published:boolean)=>{if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}const name=(document.getElementById('am-name')as HTMLInputElement).value.trim(),org=(document.getElementById('am-org')as HTMLInputElement).value.trim();if(!name||!org){alert('Please fill in Exam Name and Organization.');return;}const item:AdmitCardItem={id:existing?.id||crypto.randomUUID(),examName:name,org,releaseDate:(document.getElementById('am-release')as HTMLInputElement).value.trim()||'To be announced',examDate:(document.getElementById('am-exam')as HTMLInputElement).value.trim()||'To be announced',downloadUrl:(document.getElementById('am-url')as HTMLInputElement).value.trim(),officialWebsite:(document.getElementById('am-web')as HTMLInputElement).value.trim(),description:(document.getElementById('am-desc')as HTMLTextAreaElement).value.trim(),published};await JobKhojDataStore.saveAdmitCard(item);close();this.showToast(`Admit card ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminAdmitCards(main);};
     document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
@@ -2446,13 +2549,13 @@ class JobKhojApp {
     const articles=JobKhojDataStore.getBlog();
     container.innerHTML=`<div><div class="admin-view-header"><div><h1 class="admin-heading">Manage Blog Articles</h1><p class="admin-subheading">Total ${articles.length} blog articles in database</p></div><button class="btn-admin-action-primary" id="admin-add-article-btn">${Icons.plus}<span>+ CREATE NEW ARTICLE</span></button></div>
       <div class="admin-table-container"><table class="admin-table"><thead><tr><th>TITLE & CATEGORY</th><th>AUTHOR</th><th>DATE</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>
-      ${articles.length?articles.map(a=>`<tr><td><div class="admin-table-title">${this.escapeHtml(a.title)}</div><div class="admin-table-sub">${this.escapeHtml(a.category)}</div></td><td>${this.escapeHtml(a.author)}</td><td>${this.escapeHtml(a.publishedDate)}</td><td><span class="job-status-badge ${a.published?'status-active':'status-expired'}">${a.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action blog-edit-btn" data-id="${a.id}">Edit</button><button class="btn-table-action blog-duplicate-btn" data-id="${a.id}">Duplicate</button><button class="btn-table-action blog-toggle-btn" data-id="${a.id}">${a.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete blog-delete-btn" data-id="${a.id}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No blog articles created yet. Click <strong>+ CREATE NEW ARTICLE</strong> to add one.</td></tr>`}
+      ${articles.length?articles.map(a=>`<tr><td><div class="admin-table-title">${this.escapeHtml(a.title)}</div><div class="admin-table-sub">${this.escapeHtml(a.category)}</div></td><td>${this.escapeHtml(a.author)}</td><td>${this.escapeHtml(a.publishedDate)}</td><td><span class="job-status-badge ${a.published?'status-active':'status-expired'}">${a.published?'PUBLISHED':'DRAFT'}</span></td><td><div class="admin-actions-cell"><button class="btn-table-action blog-edit-btn" data-id="${this.escapeHtml(a.id || "")}">Edit</button><button class="btn-table-action blog-duplicate-btn" data-id="${this.escapeHtml(a.id || "")}">Duplicate</button><button class="btn-table-action blog-toggle-btn" data-id="${this.escapeHtml(a.id || "")}">${a.published?'Unpublish':'Publish'}</button><button class="btn-table-action btn-table-delete blog-delete-btn" data-id="${this.escapeHtml(a.id || "")}">Delete</button></div></td></tr>`).join(''):`<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--muted);">No blog articles created yet. Click <strong>+ CREATE NEW ARTICLE</strong> to add one.</td></tr>`}
       </tbody></table></div></div>`;
     document.getElementById('admin-add-article-btn')?.addEventListener('click',()=>this.openBlogModal(null));
     document.querySelectorAll('.blog-edit-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(x)this.openBlogModal(x);}));
-    document.querySelectorAll('.blog-duplicate-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;articles.unshift({...x,id:'bl-'+Date.now(),title:`${x.title} (Copy)`,slug:`${x.slug}-copy`,published:false});JobKhojDataStore.saveBlog(articles);this.showToast('Article duplicated as draft');this.renderAdminBlog(container);}));
-    document.querySelectorAll('.blog-toggle-btn').forEach(btn=>btn.addEventListener('click',()=>{const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;JobKhojDataStore.saveBlog(articles);this.showToast(`Article ${x.published?'published':'unpublished'}`);this.renderAdminBlog(container);}));
-    document.querySelectorAll('.blog-delete-btn').forEach(btn=>btn.addEventListener('click',()=>{if(!confirm('Are you sure you want to delete this article?'))return;JobKhojDataStore.saveBlog(articles.filter(x=>x.id!==btn.getAttribute('data-id')));this.showToast('Article deleted');this.renderAdminBlog(container);}));
+    document.querySelectorAll('.blog-duplicate-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;const copy={...x,id:crypto.randomUUID(),title:`${x.title} (Copy)`,slug:`${x.slug}-copy`,published:false};await JobKhojDataStore.saveBlogItem(copy);this.showToast('Article duplicated as draft');this.renderAdminBlog(container);}));
+    document.querySelectorAll('.blog-toggle-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }const x=articles.find(a=>a.id===btn.getAttribute('data-id'));if(!x)return;x.published=!x.published;await JobKhojDataStore.setPublished('blog', x.id, x.published);this.showToast(`Article ${x.published?'published':'unpublished'}`);this.renderAdminBlog(container);}));
+    document.querySelectorAll('.blog-delete-btn').forEach(btn=>btn.addEventListener('click',async()=>{if (!JobKhojDataStore.canWrite()) { this.showToast('Editor permission required', false); return; }if(!confirm('Are you sure you want to delete this article?'))return;await JobKhojDataStore.deleteContent('blog', btn.getAttribute('data-id') || '');this.showToast('Article deleted');this.renderAdminBlog(container);}));
   }
 
   private openBlogModal(existing: BlogItem | null): void {
@@ -2470,7 +2573,7 @@ class JobKhojApp {
       <div class="admin-modal-footer"><button type="button" class="btn-table-action" id="content-modal-cancel">CANCEL</button><button type="button" class="btn-table-action" id="content-modal-draft">SAVE DRAFT</button><button type="submit" class="btn-admin-action-primary">PUBLISH ARTICLE</button></div></form></div></div>`;
     root.querySelector('#content-modal-overlay')?.classList.add('open');
     const close=()=>root.innerHTML='';document.getElementById('content-modal-close')?.addEventListener('click',close);document.getElementById('content-modal-cancel')?.addEventListener('click',close);
-    const save=(published:boolean)=>{const title=(document.getElementById('bm-title')as HTMLInputElement).value.trim(),content=(document.getElementById('bm-content')as HTMLTextAreaElement).value.trim();if(!title||!content){alert('Please fill in Article Title and Article Content.');return;}const slug=existing?.slug||title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');const item:BlogItem={id:existing?.id||'bl-'+Date.now(),title,slug,category:(document.getElementById('bm-category')as HTMLInputElement).value.trim()||'Career Guidance',featuredImage:(document.getElementById('bm-image')as HTMLInputElement).value.trim(),excerpt:(document.getElementById('bm-excerpt')as HTMLTextAreaElement).value.trim(),content,author:(document.getElementById('bm-author')as HTMLInputElement).value.trim()||'Job Khoj Editorial Team',publishedDate:existing?.publishedDate||`${new Date().getDate()} ${new Date().toLocaleString('default',{month:'short'})} ${new Date().getFullYear()}`,seoTitle:(document.getElementById('bm-seo-title')as HTMLInputElement).value.trim()||`${title} | JOB KHOJ`,seoDescription:(document.getElementById('bm-seo-desc')as HTMLTextAreaElement).value.trim(),keywords:(document.getElementById('bm-keywords')as HTMLInputElement).value.trim(),published};const all=JobKhojDataStore.getBlog(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);JobKhojDataStore.saveBlog(all);close();this.showToast(`Article ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminBlog(main);};
+    const save=async (published:boolean)=>{if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}const title=(document.getElementById('bm-title')as HTMLInputElement).value.trim(),content=(document.getElementById('bm-content')as HTMLTextAreaElement).value.trim();if(!title||!content){alert('Please fill in Article Title and Article Content.');return;}const slug=existing?.slug||title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');const item:BlogItem={id:existing?.id||crypto.randomUUID(),title,slug,category:(document.getElementById('bm-category')as HTMLInputElement).value.trim()||'Career Guidance',featuredImage:(document.getElementById('bm-image')as HTMLInputElement).value.trim(),excerpt:(document.getElementById('bm-excerpt')as HTMLTextAreaElement).value.trim(),content,author:(document.getElementById('bm-author')as HTMLInputElement).value.trim()||'Job Khoj Editorial Team',publishedDate:existing?.publishedDate||`${new Date().getDate()} ${new Date().toLocaleString('default',{month:'short'})} ${new Date().getFullYear()}`,seoTitle:(document.getElementById('bm-seo-title')as HTMLInputElement).value.trim()||`${title} | JOB KHOJ`,seoDescription:(document.getElementById('bm-seo-desc')as HTMLTextAreaElement).value.trim(),keywords:(document.getElementById('bm-keywords')as HTMLInputElement).value.trim(),published};const all=JobKhojDataStore.getBlog(),i=all.findIndex(x=>x.id===item.id);if(i>=0)all[i]=item;else all.unshift(item);await JobKhojDataStore.saveBlogItem(item);close();this.showToast(`Article ${published?'published':'saved as draft'}`);const main=document.getElementById('admin-main-view');if(main)this.renderAdminBlog(main);};
     document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
@@ -2560,12 +2663,12 @@ class JobKhojApp {
 
             <div class="admin-form-group">
               <label class="admin-form-label">WhatsApp Number (With Country Code)</label>
-              <input type="text" id="st-wa-num" class="admin-form-input" value="${settings.whatsappNumber}" placeholder="+919876543210">
+              <input type="text" id="st-wa-num" class="admin-form-input" value="${this.escapeHtml(settings.whatsappNumber || '')}" placeholder="+919876543210">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Official WhatsApp Channel Link</label>
-              <input type="url" id="st-wa-chan" class="admin-form-input" value="${settings.whatsappChannelUrl}">
+              <input type="url" id="st-wa-chan" class="admin-form-input" value="${this.escapeHtml(settings.whatsappChannelUrl)}">
             </div>
             <div class="admin-form-group">
               <label class="admin-form-label">Official Telegram Channel Link</label>
@@ -2574,12 +2677,12 @@ class JobKhojApp {
 
             <div class="admin-form-group">
               <label class="admin-form-label">Support Inquiries Default Message Template</label>
-              <textarea id="st-wa-supp" class="admin-form-textarea" rows="2">${settings.defaultSupportMsg}</textarea>
+              <textarea id="st-wa-supp" class="admin-form-textarea" rows="2">${this.escapeHtml(settings.defaultSupportMsg || '')}</textarea>
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">WhatsApp Apply Message Template</label>
-              <textarea id="st-wa-apply" class="admin-form-textarea" rows="2">${settings.whatsappApplyMsgTemplate}</textarea>
+              <textarea id="st-wa-apply" class="admin-form-textarea" rows="2">${this.escapeHtml(settings.whatsappApplyMsgTemplate || '')}</textarea>
               <span style="font-size:11.5px;color:#94A3B8;margin-top:4px;">Supported dynamic placeholders: <strong>{{JOB_TITLE}}</strong> and <strong>{{JOB_ID}}</strong></span>
             </div>
 
@@ -2602,17 +2705,17 @@ class JobKhojApp {
 
             <div class="admin-form-group">
               <label class="admin-form-label">Platform Tagline</label>
-              <input type="text" id="st-tagline" class="admin-form-input" value="${settings.siteTagline}">
+              <input type="text" id="st-tagline" class="admin-form-input" value="${this.escapeHtml(settings.siteTagline || '')}">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Contact Support Email</label>
-              <input type="email" id="st-email" class="admin-form-input" value="${settings.supportEmail}">
+              <input type="email" id="st-email" class="admin-form-input" value="${this.escapeHtml(settings.supportEmail)}">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Footer Text / Short About</label>
-              <textarea id="st-about" class="admin-form-textarea" rows="3">${settings.footerAboutText}</textarea>
+              <textarea id="st-about" class="admin-form-textarea" rows="3">${this.escapeHtml(settings.footerAboutText)}</textarea>
             </div>
           </div>
 
@@ -2629,10 +2732,11 @@ class JobKhojApp {
     `;
 
     document.getElementById('btn-goto-password')?.addEventListener('click', () => {
-      window.location.hash = '#admin/password';
+      history.pushState({}, '', '/admin/password'); void this.handleRouting();
     });
 
-    document.getElementById('admin-settings-form')?.addEventListener('submit', (e) => {
+    document.getElementById('admin-settings-form')?.addEventListener('submit', async (e) => {
+      if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}
       e.preventDefault();
       settings.whatsappNumber = (document.getElementById('st-wa-num') as HTMLInputElement).value.trim();
       settings.whatsappChannelUrl = (document.getElementById('st-wa-chan') as HTMLInputElement).value.trim();
@@ -2645,7 +2749,7 @@ class JobKhojApp {
       settings.supportEmail = (document.getElementById('st-email') as HTMLInputElement).value.trim();
       settings.footerAboutText = (document.getElementById('st-about') as HTMLTextAreaElement).value.trim();
 
-      JobKhojDataStore.saveSettings(settings);
+      await JobKhojDataStore.saveSettings(settings);
       this.showToast('Platform & WhatsApp settings saved successfully');
     });
   }
@@ -2664,7 +2768,7 @@ class JobKhojApp {
         </div>
         <div class="stat-metric-card" style="margin-bottom:20px;">
           <h3 class="admin-heading" style="font-size:18px;">CSV Job Import / Export</h3>
-          <p class="admin-subheading">Bulk add jobs from Excel/Google Sheets. Import is validated before saving; export creates a CSV backup.</p>
+          <p class="admin-subheading">Bulk add jobs from Excel/Google Sheets. CSV imports are validated, duplicate titles are skipped, and imported status/category values are normalised.</p>
           <div class="flex items-center gap-3" style="flex-wrap:wrap;">
             <button class="btn-admin-action-primary" id="csv-template-btn">DOWNLOAD CSV TEMPLATE</button>
             <button class="btn-table-action" id="csv-export-btn">EXPORT ALL JOBS</button>
@@ -2708,31 +2812,120 @@ class JobKhojApp {
         </div>
         <div class="stat-metric-card">
           <h3 class="admin-heading" style="font-size:18px;">Admin Roles & Notifications</h3>
-          <p style="font-size:13px;color:#94A3B8;">Owner/editor/viewer roles are stored as configuration. Secure multi-user authentication requires Supabase Auth/RLS; this static client must not be treated as a security boundary.</p>
+          <p style="font-size:13px;color:#94A3B8;">Roles are enforced by Supabase Auth + Row Level Security. Your current role: <strong>${this.escapeHtml(JobKhojDataStore.getAdminRole() || 'unknown')}</strong>.</p>
           <div class="admin-form-group"><label class="admin-form-label">Admin Email</label><input id="role-email" class="admin-form-input" placeholder="editor@example.com"></div>
-          <div class="admin-form-row"><select id="role-select" class="admin-form-select"><option value="editor">Editor</option><option value="viewer">Viewer</option></select><button class="btn-table-action" id="role-add">ADD ADMIN ROLE</button></div>
-          <div style="margin-top:12px;">${features.adminUsers.map(u=>`<div style="padding:7px 0;color:#CBD5E1;">${this.escapeHtml(u.email)} — <strong>${u.role}</strong></div>`).join('')}</div>
+          <div class="admin-form-row"><select id="role-select" class="admin-form-select"><option value="editor">Editor</option><option value="viewer">Viewer</option><option value="owner">Owner</option></select><button class="btn-table-action" id="role-add">ADD / UPDATE ADMIN</button></div>
+          <div class="admin-form-row" style="margin-top:10px;"><input id="role-remove-email" class="admin-form-input" placeholder="staff@example.com"><button class="btn-table-action btn-table-delete" id="role-remove">REMOVE ADMIN</button></div>
+          <div style="margin-top:12px;color:#94A3B8;font-size:12px;">Staff membership is managed securely in Supabase; emails and roles are never stored in public site configuration.</div>
           <label class="checkbox-label-item" style="margin-top:10px;"><input type="checkbox" id="push-enabled" ${features.pushNotificationsEnabled?'checked':''}><span>Enable push-notification configuration</span></label>
+          <div class="admin-form-group" style="margin-top:12px;"><label class="admin-form-label">Push Notification Title</label><input id="push-title" class="admin-form-input" maxlength="120" placeholder="New Job Alert"></div>
+          <div class="admin-form-group"><label class="admin-form-label">Push Message</label><textarea id="push-body" class="admin-form-textarea" rows="2" maxlength="500" placeholder="A new recruitment notification is available."></textarea></div>
+          <div class="admin-form-group"><label class="admin-form-label">Notification URL</label><input id="push-url" class="admin-form-input" value="/jobs"></div>
+          <button class="btn-table-action" id="push-send-btn">SEND PUSH TO SUBSCRIBERS</button>
           <p style="font-size:11px;color:#64748B;margin-top:8px;">Browser push delivery also needs a service worker, VAPID keys and a notification backend/provider.</p>
         </div>
       </div>`;
 
     const download = (name:string, content:string, type:string) => { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),500); };
     const csvEscape=(v:any)=>{const s=String(v??''); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
-    const csvHeaders=['title','organization','category','post','vacancy','qualification','age_limit','application_fee','start_date','last_date','exam_date','selection_process','salary','apply_url','notification_url','official_url','status','featured'];
+    const csvHeaders=['title','organization','category','post','job_type','location','vacancy','qualification','age_limit','application_fee','start_date','last_date','exam_date','selection_process','salary','apply_url','notification_url','official_url','status','featured'];
     document.getElementById('csv-template-btn')?.addEventListener('click',()=>download('job-khoj-template.csv',csvHeaders.join(',')+'\n', 'text/csv'));
-    document.getElementById('csv-export-btn')?.addEventListener('click',()=>{ const rows=jobs.map(j=>[j.title,j.org,j.category,'',j.vacancies,j.qualification,j.ageLimit,j.appFee,j.appStartDate,j.lastDate,j.examDate,j.selectionProcess,j.salary,j.applyUrl,j.officialNotifUrl,j.officialWebsiteUrl,j.published?'published':'draft',j.featured?'yes':'no']); download('job-khoj-jobs.csv',[csvHeaders.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n'),'text/csv'); });
-    document.getElementById('csv-import-input')?.addEventListener('change',(ev)=>{const file=(ev.target as HTMLInputElement).files?.[0]; if(!file)return; const reader=new FileReader(); reader.onload=()=>{const text=String(reader.result||''); const lines=text.split(/\r?\n/).filter(Boolean); if(lines.length<2){this.showToast('CSV has no job rows',false);return;} const headers=lines[0].split(',').map(x=>x.trim().replace(/^"|"$/g,'')); const idx=(n:string)=>headers.indexOf(n); const imported:JobItem[]=[]; for(let i=1;i<lines.length;i++){const vals=lines[i].match(/(?:"(?:[^"]|"")*"|[^,])+/g)?.map(v=>v.trim().replace(/^"|"$/g,'').replace(/""/g,'"'))||[]; const get=(n:string)=>vals[idx(n)]||''; const title=get('title'),org=get('organization'); if(!title||!org)continue; const slug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); imported.push({id:'jk-'+Date.now()+'-'+i,title,org,category:(get('category')||'Government') as any,jobType:'Permanent',vacancies:get('vacancy')||'Various Posts',qualification:get('qualification'),location:'All India',salary:get('salary')||'As per norms',ageLimit:get('age_limit')||'As per rules',appStartDate:get('start_date'),lastDate:get('last_date'),examDate:get('exam_date')||'To be announced',appFee:get('application_fee')||'Refer notification',selectionProcess:get('selection_process')||'Written Exam & Document Verification',documentsRequired:[],jobDesc:'',officialNotifUrl:get('notification_url'),officialWebsiteUrl:get('official_url'),applyUrl:get('apply_url'),whatsappApplyEnabled:true,featured:get('featured').toLowerCase()==='yes',published:get('status').toLowerCase()==='published',slug,postedDate:new Date().toLocaleDateString('en-IN'),status:'Active'});} const existing=JobKhojDataStore.getJobs(); const seen=new Set(existing.map(j=>j.title.toLowerCase())); const fresh=imported.filter(j=>!seen.has(j.title.toLowerCase())); JobKhojDataStore.saveJobs([...fresh,...existing]); document.getElementById('csv-preview')!.textContent=`Imported ${fresh.length} new jobs; skipped ${imported.length-fresh.length} duplicates.`; this.showToast(`Imported ${fresh.length} jobs`); }; reader.readAsText(file);});
-    document.getElementById('seo-save-btn')?.addEventListener('click',()=>{features.seoSiteTitle=(document.getElementById('ft-seo-title') as HTMLInputElement).value.trim();features.seoSiteDescription=(document.getElementById('ft-seo-desc') as HTMLTextAreaElement).value.trim();features.seoKeywords=(document.getElementById('ft-seo-keywords') as HTMLInputElement).value.trim();features.seoCanonicalUrl=(document.getElementById('ft-seo-canonical') as HTMLInputElement).value.trim();JobKhojDataStore.saveFeatures(features);document.title=features.seoSiteTitle;this.showToast('SEO settings saved');});
-    document.getElementById('alerts-save-btn')?.addEventListener('click',()=>{features.announcementEnabled=(document.getElementById('ft-ann-enabled') as HTMLInputElement).checked;features.announcementText=(document.getElementById('ft-ann-text') as HTMLInputElement).value;features.announcementUrl=(document.getElementById('ft-ann-url') as HTMLInputElement).value;features.popupEnabled=(document.getElementById('ft-popup-enabled') as HTMLInputElement).checked;features.popupTitle=(document.getElementById('ft-popup-title') as HTMLInputElement).value;features.popupMessage=(document.getElementById('ft-popup-msg') as HTMLTextAreaElement).value;features.popupUrl=(document.getElementById('ft-popup-url') as HTMLInputElement).value;features.popupDelayMs=Number((document.getElementById('ft-popup-delay') as HTMLInputElement).value)||5000;JobKhojDataStore.saveFeatures(features);this.showToast('Alert settings saved');});
-    document.getElementById('expire-jobs-btn')?.addEventListener('click',()=>{const n=JobKhojDataStore.expireJobs();this.showToast(`${n} expired job(s) checked`);this.renderAdminTools(container);});
+    document.getElementById('csv-export-btn')?.addEventListener('click',()=>{ const rows=jobs.map(j=>[j.title,j.org,j.category,j.post||'',j.jobType,j.location,j.vacancies,j.qualification,j.ageLimit,j.appFee,j.appStartDate,j.lastDate,j.examDate,j.selectionProcess,j.salary,j.applyUrl,j.officialNotifUrl,j.officialWebsiteUrl,j.published?'published':'draft',j.featured?'yes':'no']); download('job-khoj-jobs.csv',[csvHeaders.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n'),'text/csv'); });
+    const parseCSV = (text: string): string[][] => {
+      const rows: string[][] = [];
+      let row: string[] = [], cell = '', quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i], next = text[i + 1];
+        if (ch === '"') {
+          if (quoted && next === '"') { cell += '"'; i++; }
+          else { quoted = !quoted; }
+        } else if (ch === ',' && !quoted) { row.push(cell.trim()); cell = ''; }
+        else if ((ch === '\n' || ch === '\r') && !quoted) {
+          if (ch === '\r' && next === '\n') i++;
+          row.push(cell.trim()); cell = '';
+          if (row.some(v => v !== '')) rows.push(row);
+          row = [];
+        } else { cell += ch; }
+      }
+      if (cell.length || row.length) { row.push(cell.trim()); if (row.some(v => v !== '')) rows.push(row); }
+      return rows;
+    };
+    const normaliseCategory = (value: string): JobItem['category'] => {
+      const v = value.toLowerCase();
+      if (v.includes('bank')) return 'Bank';
+      if (v.includes('rail')) return 'Railway';
+      if (v.includes('teach')) return 'Teaching';
+      if (v.includes('defence') || v.includes('defense') || v.includes('navy') || v.includes('army')) return 'Defence';
+      if (v.includes('police')) return 'Police';
+      if (v.includes('apprent')) return 'Apprentice';
+      if (v.includes('private')) return 'Private';
+      return 'Government';
+    };
+    document.getElementById('csv-import-input')?.addEventListener('change',(ev)=>{ if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}
+      const input = ev.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const rows = parseCSV(String(reader.result || '').replace(/^\uFEFF/, ''));
+          if (rows.length < 2) { this.showToast('CSV has no job rows', false); return; }
+          const headers = rows[0].map(h => h.trim().toLowerCase());
+          const idx = (name:string) => headers.indexOf(name);
+          const required = ['title','organization','vacancy','qualification'];
+          const missing = required.filter(h => idx(h) < 0);
+          if (missing.length) { this.showToast(`Invalid CSV. Missing: ${missing.join(', ')}`, false); return; }
+          const imported: JobItem[] = [];
+          let invalidRows = 0;
+          for (let i=1; i<rows.length; i++) {
+            const vals = rows[i];
+            if(vals.length !== rows[0].length){ invalidRows++; continue; }
+            const get = (n:string) => { const nidx=idx(n); return nidx >= 0 ? (vals[nidx] || '') : ''; };
+            const validDate=(v:string)=>!v || !Number.isNaN(Date.parse(v));
+            const validUrl=(v:string)=>!v || /^https:\/\//i.test(v);
+            const title=get('title').trim(), org=get('organization').trim();
+            if (!title || !org || !validDate(get('start_date')) || !validDate(get('last_date')) || !validDate(get('exam_date')) || !validUrl(get('apply_url')) || !validUrl(get('notification_url')) || !validUrl(get('official_url'))) { invalidRows++; continue; }
+            const startDate=Date.parse(get('start_date')); const endDate=Date.parse(get('last_date'));
+            if(!Number.isNaN(startDate)&&!Number.isNaN(endDate)&&startDate>endDate){invalidRows++;continue;}
+            const baseSlug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || `job-${crypto.randomUUID()}`;
+            const rawStatus=get('status').toLowerCase();
+            const published = ['published','open','active','live','yes'].includes(rawStatus);
+            const jobStatus: JobItem['status'] = rawStatus.includes('expired') ? 'Expired' : (rawStatus.includes('closing') ? 'Closing Soon' : 'Active');
+            imported.push({
+              id:crypto.randomUUID(), title, org, post:get('post'), category:normaliseCategory(get('category')), jobType:(['permanent','contractual','apprentice','full time','full-time'].includes(get('job_type').toLowerCase()) ? (get('job_type').toLowerCase().includes('contract')?'Contractual':get('job_type').toLowerCase().includes('apprent')?'Apprentice':get('job_type').toLowerCase().includes('full')?'Full Time':'Permanent') : 'Permanent'), vacancies:get('vacancy')||'Various Posts',
+              qualification:get('qualification'), location:get('location')||'All India', salary:get('salary')||'As per norms', ageLimit:get('age_limit')||'As per rules',
+              appStartDate:get('start_date'), lastDate:get('last_date'), examDate:get('exam_date')||'To be announced',
+              appFee:get('application_fee')||'Refer notification', selectionProcess:get('selection_process')||'Written Exam & Document Verification',
+              documentsRequired:[], jobDesc:'', howToApply:'', officialNotifUrl:get('notification_url'), officialWebsiteUrl:get('official_url'),
+              applyUrl:get('apply_url'), whatsappApplyEnabled:true, featured:['yes','true','1'].includes(get('featured').toLowerCase()),
+              published, slug:baseSlug, postedDate:new Date().toLocaleDateString('en-IN'), status:jobStatus
+            });
+          }
+          const existing=JobKhojDataStore.getJobs();
+          const seen=new Set(existing.map(j=>(j.title.trim().toLowerCase()+'|'+j.org.trim().toLowerCase())));
+          const fresh: JobItem[] = [];
+          for (const job of imported) { const key=job.title.trim().toLowerCase()+'|'+job.org.trim().toLowerCase(); if(seen.has(key)) continue; seen.add(key); fresh.push(job); }
+          for (const job of fresh) await JobKhojDataStore.saveJob(job);
+          document.getElementById('csv-preview')!.textContent=`Imported ${fresh.length} new jobs; skipped ${imported.length-fresh.length} duplicates${invalidRows ? `; ${invalidRows} invalid rows skipped` : ''}.`;
+          this.showToast(`Imported ${fresh.length} jobs`);
+          this.renderAdminTools(container);
+        } catch (error) { console.error(error); this.showToast('Could not read CSV. Please use the downloaded template.', false); }
+      };
+      reader.readAsText(file);
+      input.value='';
+    });
+    document.getElementById('seo-save-btn')?.addEventListener('click',async()=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}features.seoSiteTitle=(document.getElementById('ft-seo-title') as HTMLInputElement).value.trim();features.seoSiteDescription=(document.getElementById('ft-seo-desc') as HTMLTextAreaElement).value.trim();features.seoKeywords=(document.getElementById('ft-seo-keywords') as HTMLInputElement).value.trim();features.seoCanonicalUrl=(document.getElementById('ft-seo-canonical') as HTMLInputElement).value.trim();await JobKhojDataStore.saveFeatures(features);document.title=features.seoSiteTitle;this.showToast('SEO settings saved');});
+    document.getElementById('alerts-save-btn')?.addEventListener('click',async()=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}features.announcementEnabled=(document.getElementById('ft-ann-enabled') as HTMLInputElement).checked;features.announcementText=(document.getElementById('ft-ann-text') as HTMLInputElement).value;features.announcementUrl=(document.getElementById('ft-ann-url') as HTMLInputElement).value;features.popupEnabled=(document.getElementById('ft-popup-enabled') as HTMLInputElement).checked;features.popupTitle=(document.getElementById('ft-popup-title') as HTMLInputElement).value;features.popupMessage=(document.getElementById('ft-popup-msg') as HTMLTextAreaElement).value;features.popupUrl=(document.getElementById('ft-popup-url') as HTMLInputElement).value;features.popupDelayMs=Number((document.getElementById('ft-popup-delay') as HTMLInputElement).value)||5000;await JobKhojDataStore.saveFeatures(features);this.showToast('Alert settings saved');});
+    document.getElementById('expire-jobs-btn')?.addEventListener('click',async()=>{const n=await JobKhojDataStore.expireJobs();this.showToast(`${n} expired job(s) checked`);this.renderAdminTools(container);});
     document.getElementById('backup-btn')?.addEventListener('click',()=>download('job-khoj-backup.json',JobKhojDataStore.backupAll(),'application/json'));
-    document.getElementById('restore-input')?.addEventListener('change',(ev)=>{const file=(ev.target as HTMLInputElement).files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{JobKhojDataStore.restoreAll(JSON.parse(String(reader.result)));this.showToast('Backup restored');this.renderAdminTools(container);}catch{this.showToast('Invalid backup file',false);}};reader.readAsText(file);});
-    document.getElementById('sitemap-btn')?.addEventListener('click',()=>{const base=features.seoCanonicalUrl.replace(/\/$/,'')||location.origin;const urls=[base+'/',base+'/#jobs',...JobKhojDataStore.getJobs().filter(j=>j.published).map(j=>base+'/#job/'+j.slug)];const xml='<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+urls.map(u=>`<url><loc>${this.escapeHtml(u)}</loc></url>`).join('')+'</urlset>';download('sitemap.xml',xml,'application/xml');});
-    document.getElementById('redir-add')?.addEventListener('click',()=>{const from=(document.getElementById('redir-from') as HTMLInputElement).value.trim();const to=(document.getElementById('redir-to') as HTMLInputElement).value.trim();if(!from||!to)return;features.redirectRules.push({from,to,enabled:true});JobKhojDataStore.saveFeatures(features);this.renderAdminTools(container);});
-    document.querySelectorAll('[data-redir-delete]').forEach(b=>b.addEventListener('click',()=>{features.redirectRules.splice(Number((b as HTMLElement).dataset.redirDelete),1);JobKhojDataStore.saveFeatures(features);this.renderAdminTools(container);}));
-    document.getElementById('role-add')?.addEventListener('click',()=>{const email=(document.getElementById('role-email') as HTMLInputElement).value.trim();const role=(document.getElementById('role-select') as HTMLSelectElement).value as 'editor'|'viewer';if(!email)return;features.adminUsers.push({email,role});JobKhojDataStore.saveFeatures(features);this.renderAdminTools(container);});
-    document.getElementById('push-enabled')?.addEventListener('change',(e)=>{features.pushNotificationsEnabled=(e.target as HTMLInputElement).checked;JobKhojDataStore.saveFeatures(features);this.showToast('Push notification setting saved');});
+    document.getElementById('restore-input')?.addEventListener('change',(ev)=>{const file=(ev.target as HTMLInputElement).files?.[0];if(!file)return;const reader=new FileReader();reader.onload=async()=>{try{await JobKhojDataStore.restoreAll(JSON.parse(String(reader.result)));this.showToast('Backup restored');this.renderAdminTools(container);}catch{this.showToast('Invalid backup file',false);}};reader.readAsText(file);});
+    document.getElementById('sitemap-btn')?.addEventListener('click',()=>{const base=(features.seoCanonicalUrl||location.origin).replace(/\/$/,'');const esc=(v:string)=>v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');const urls=[base+'/',base+'/jobs',base+'/exams',base+'/results',base+'/admit-cards',base+'/blog',...JobKhojDataStore.getJobs().filter(j=>j.published).map(j=>base+'/job/'+encodeURIComponent(j.slug)),...JobKhojDataStore.getBlog().filter(b=>b.published).map(b=>base+'/article/'+encodeURIComponent(b.slug))];const xml='<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+urls.map(u=>`<url><loc>${esc(u)}</loc></url>`).join('')+'</urlset>';download('sitemap.xml',xml,'application/xml');});
+    document.getElementById('redir-add')?.addEventListener('click',async()=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}const from=(document.getElementById('redir-from') as HTMLInputElement).value.trim();const to=(document.getElementById('redir-to') as HTMLInputElement).value.trim();if(!from||!to)return;features.redirectRules.push({from,to,enabled:true});await JobKhojDataStore.saveFeatures(features);this.renderAdminTools(container);});
+    document.querySelectorAll('[data-redir-delete]').forEach(b=>b.addEventListener('click',async()=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}features.redirectRules.splice(Number((b as HTMLElement).dataset.redirDelete),1);await JobKhojDataStore.saveFeatures(features);this.renderAdminTools(container);}));
+    document.getElementById('role-add')?.addEventListener('click',async(e)=>{e.preventDefault();if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}const email=(document.getElementById('role-email') as HTMLInputElement).value.trim();const role=(document.getElementById('role-select') as HTMLSelectElement).value as 'owner'|'editor'|'viewer';if(!email)return;const {error}=await supabase.rpc('upsert_admin_by_email',{p_email:email,p_role:role});if(error){this.showToast(error.message,false);return;}this.showToast('Admin role saved');this.renderAdminTools(container);});
+    document.getElementById('role-remove')?.addEventListener('click',async(e)=>{e.preventDefault();if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}const email=(document.getElementById('role-remove-email') as HTMLInputElement).value.trim();if(!email)return;const {error}=await supabase.rpc('remove_admin_by_email',{p_email:email});if(error){this.showToast(error.message,false);return;}this.showToast('Admin role removed');this.renderAdminTools(container);});
+    document.getElementById('push-send-btn')?.addEventListener('click',async()=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}const title=(document.getElementById('push-title') as HTMLInputElement).value.trim(),body=(document.getElementById('push-body') as HTMLTextAreaElement).value.trim(),url=(document.getElementById('push-url') as HTMLInputElement).value.trim()||'/jobs';if(!title||!body){this.showToast('Enter push title and message',false);return;}try{const r=await JobKhojDataStore.sendPushNotification(title,body,url);this.showToast(`Push sent to ${r?.sent??0} subscribers`);}catch(e:any){this.showToast(e?.message||'Push delivery failed',false);}});
+    document.getElementById('push-enabled')?.addEventListener('change',async(e)=>{if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}features.pushNotificationsEnabled=(e.target as HTMLInputElement).checked;await JobKhojDataStore.saveFeatures(features);this.showToast('Push notification setting saved');});
   }
 
   // 9. Change Admin Password Sub-view
@@ -2744,7 +2937,7 @@ class JobKhojApp {
         <div class="admin-view-header">
           <div>
             <h1 class="admin-heading">Change Admin Password</h1>
-            <p class="admin-subheading">Update login credentials for jobkhojsupport@gmail.com</p>
+            <p class="admin-subheading">Update the authenticated Supabase account password</p>
           </div>
         </div>
 
@@ -2775,41 +2968,23 @@ class JobKhojApp {
       </div>
     `;
 
-    document.getElementById('change-pass-form')?.addEventListener('submit', (e) => {
+    document.getElementById('change-pass-form')?.addEventListener('submit', async (e) => {
+      if(!JobKhojDataStore.canManageAdmins()){this.showToast('Owner permission required',false);return;}
       e.preventDefault();
-      const current = (document.getElementById('cp-current') as HTMLInputElement).value;
-      const newP = (document.getElementById('cp-new') as HTMLInputElement).value;
-      const confirmP = (document.getElementById('cp-confirm') as HTMLInputElement).value;
-      const err = document.getElementById('cp-error');
-
-      if (current !== settings.adminPassword) {
-        if (err) {
-          err.style.display = 'block';
-          err.textContent = 'Current password does not match.';
-        }
-        return;
-      }
-
-      if (newP.length < 6) {
-        if (err) {
-          err.style.display = 'block';
-          err.textContent = 'New password must be at least 6 characters.';
-        }
-        return;
-      }
-
-      if (newP !== confirmP) {
-        if (err) {
-          err.style.display = 'block';
-          err.textContent = 'New passwords do not match.';
-        }
-        return;
-      }
-
-      settings.adminPassword = newP;
-      JobKhojDataStore.saveSettings(settings);
+      const current=(document.getElementById('cp-current') as HTMLInputElement).value;
+      const newP=(document.getElementById('cp-new') as HTMLInputElement).value;
+      const confirmP=(document.getElementById('cp-confirm') as HTMLInputElement).value;
+      const err=document.getElementById('cp-error');
+      if(newP.length<6){if(err){err.style.display='block';err.textContent='New password must be at least 6 characters.';}return;}
+      if(newP!==confirmP){if(err){err.style.display='block';err.textContent='New passwords do not match.';}return;}
+      const {data:{user}}=await supabase.auth.getUser();
+      if(!user?.email){if(err){err.style.display='block';err.textContent='No authenticated account found.';}return;}
+      const {error:verifyError}=await supabase.auth.signInWithPassword({email:user.email,password:current});
+      if(verifyError){if(err){err.style.display='block';err.textContent='Current password is incorrect.';}return;}
+      const {error}=await supabase.auth.updateUser({password:newP});
+      if(error){if(err){err.style.display='block';err.textContent=error.message;}return;}
       this.showToast('Admin password updated successfully');
-      if (err) err.style.display = 'none';
+      if(err)err.style.display='none';
       (document.getElementById('change-pass-form') as HTMLFormElement).reset();
     });
   }

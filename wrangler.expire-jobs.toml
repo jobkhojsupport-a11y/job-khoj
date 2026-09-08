@@ -1,0 +1,6 @@
+name = "job-khoj-expire-jobs"
+main = "workers/expire-jobs/index.ts"
+compatibility_date = "2026-09-07"
+
+[triggers]
+crons = ["*/30 * * * *"]
