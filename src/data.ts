@@ -32,7 +32,33 @@ type Kind='jobs'|'exams'|'results'|'admit_cards'|'blog';
 const clone=<T>(v:T):T=>JSON.parse(JSON.stringify(v));
 const id=()=>crypto.randomUUID();
 const safeUrl=(v:string)=>{const s=(v||'').trim(); if(!s)return ''; try{const u=new URL(s,location.origin); return ['http:','https:'].includes(u.protocol)?s:'';}catch{return ''}};
-const normalizeDate=(v:string)=>{const s=(v||'').trim(); if(!s)return ''; if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s; let m=s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/); if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; m=s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/); if(m){const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];const mi=months.indexOf(m[2].slice(0,3).toLowerCase());if(mi>=0)return `${m[3]}-${String(mi+1).padStart(2,'0')}-${m[1].padStart(2,'0')}`;} const d=new Date(s); return Number.isNaN(d.getTime())?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
+const normalizeDate=(v:string)=>{
+  const s=(v||'').trim();
+  if(!s)return '';
+
+  const build=(y:number,m:number,d:number)=>{
+    if(!Number.isInteger(y)||!Number.isInteger(m)||!Number.isInteger(d))return '';
+    if(y<1900||y>2100||m<1||m>12||d<1||d>31)return '';
+    const dt=new Date(Date.UTC(y,m-1,d));
+    if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==m-1||dt.getUTCDate()!==d)return '';
+    return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  };
+
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m)return build(Number(m[1]),Number(m[2]),Number(m[3]));
+
+  m=s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+  if(m)return build(Number(m[3]),Number(m[2]),Number(m[1]));
+
+  m=s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+  if(m){
+    const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    const mi=months.indexOf(m[2].slice(0,3).toLowerCase());
+    if(mi>=0)return build(Number(m[3]),mi+1,Number(m[1]));
+  }
+
+  return '';
+};
 const parseDate=(v:string)=>{const n=normalizeDate(v); return n?new Date(`${n}T23:59:59`).getTime():NaN};
 
 export class JobKhojDataStore {

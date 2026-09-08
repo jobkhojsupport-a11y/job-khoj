@@ -69,7 +69,23 @@ class JobKhojApp {
         return false;
       }
 
-      JobKhojDataStore.setAdminLoggedIn(true, 'owner');
+      let adminRole: 'owner' | 'editor' | 'viewer' = 'viewer';
+
+      const { data: isOwner, error: ownerError } =
+        await supabase.rpc('is_owner');
+
+      if (!ownerError && isOwner === true) {
+        adminRole = 'owner';
+      } else {
+        const { data: isEditor, error: editorError } =
+          await supabase.rpc('is_editor');
+
+        if (!editorError && isEditor === true) {
+          adminRole = 'editor';
+        }
+      }
+
+      JobKhojDataStore.setAdminLoggedIn(true, adminRole);
 
       try {
         await JobKhojDataStore.expireJobs();
@@ -1551,7 +1567,7 @@ class JobKhojApp {
         <div class="container">
           <div class="search-summary-bar">
             <div>
-              <h1 style="font-size:22px;font-weight:900;color:var(--navy);">Search Results for "${query}"</h1>
+              <h1 style="font-size:22px;font-weight:900;color:var(--navy);">Search Results for "${this.escapeHtml(query)}"</h1>
               <span style="font-size:13.5px;color:var(--muted);">${totalMatches} total match${totalMatches === 1 ? '' : 'es'} across all recruitment updates</span>
             </div>
             <a href="/" class="btn-view-details">New Search</a>
@@ -1560,7 +1576,7 @@ class JobKhojApp {
           ${totalMatches === 0 ? `
             <div class="empty-state-box">
               <div class="empty-state-icon">${Icons.emptyState}</div>
-              <h3 class="empty-state-title">No matches found for "${query}".</h3>
+              <h3 class="empty-state-title">No matches found for "${this.escapeHtml(query)}".</h3>
               <p class="empty-state-sub">Check for typos, try keywords like "10th Pass", "Railway", "Bank PO", "SSC", or browse all categories.</p>
             </div>
           ` : `
@@ -1582,9 +1598,9 @@ class JobKhojApp {
               <div class="job-cards-list">
                 ${exams.map(e => `
                   <div class="job-card">
-                    <h3 class="job-card-title">${e.examName}</h3>
-                    <div class="job-card-org">${e.org} • Exam Date: ${e.examDate}</div>
-                    <p style="font-size:13.5px;color:#4A5568;margin:10px 0;">${e.details}</p>
+                    <h3 class="job-card-title">${this.escapeHtml(e.examName || "")}</h3>
+                    <div class="job-card-org">${this.escapeHtml(e.org || "")} • Exam Date: ${this.escapeHtml(e.examDate || "")}</div>
+                    <p style="font-size:13.5px;color:#4A5568;margin:10px 0;">${this.escapeHtml(e.details || "")}</p>
                     <a href="${this.escapeHtml(e.officialUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now" style="display:inline-block;">EXAM PORTAL ↗</a>
                   </div>
                 `).join('')}
@@ -1615,8 +1631,8 @@ class JobKhojApp {
                     <div class="item-row-list" style="margin-top:14px;">
                       ${admitCards.map(a => `
                         <div class="item-row">
-                          <div class="item-row-title">${a.examName}</div>
-                          <div class="item-row-org">${a.org} • Exam: ${a.examDate}</div>
+                          <div class="item-row-title">${this.escapeHtml(a.examName || "")}</div>
+                          <div class="item-row-org">${this.escapeHtml(a.org || "")} • Exam: ${this.escapeHtml(a.examDate || "")}</div>
                           <a href="${this.escapeHtml(a.downloadUrl || "")}" target="_blank" class="btn-item-action" style="align-self:flex-start;margin-top:6px;">Download ↗</a>
                         </div>
                       `).join('')}
@@ -1660,7 +1676,7 @@ class JobKhojApp {
 
           <form id="admin-login-form">
             <div class="admin-form-group">
-              <label class="admin-form-label">Admin Email / Username</label>
+              <label class="admin-form-label">Admin Email</label>
               <input type="email" id="login-email" class="admin-form-input" required placeholder="Enter admin email" value="">
             </div>
 
@@ -1718,7 +1734,23 @@ class JobKhojApp {
           return;
         }
 
-        JobKhojDataStore.setAdminLoggedIn(true, 'owner');
+        let adminRole: 'owner' | 'editor' | 'viewer' = 'viewer';
+
+        const { data: isOwner, error: ownerError } =
+          await supabase.rpc('is_owner');
+
+        if (!ownerError && isOwner === true) {
+          adminRole = 'owner';
+        } else {
+          const { data: isEditor, error: editorError } =
+            await supabase.rpc('is_editor');
+
+          if (!editorError && isEditor === true) {
+            adminRole = 'editor';
+          }
+        }
+
+        JobKhojDataStore.setAdminLoggedIn(true, adminRole);
         await JobKhojDataStore.loadAll();
         this.showToast('Successfully authenticated as Administrator');
         history.pushState({}, '', '/admin/overview'); this.handleRouting();
@@ -1974,7 +2006,7 @@ class JobKhojApp {
             <div style="display:flex;flex-direction:column;gap:10px;">
               ${analytics.topSearches.length > 0 ? analytics.topSearches.slice(0, 8).map(s => `
                 <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(0,0,0,0.25);padding:8px 12px;border-radius:6px;">
-                  <span style="font-weight:700;color:#E2E8F0;">${s.term}</span>
+                  <span style="font-weight:700;color:#E2E8F0;">${this.escapeHtml(s.term || "")}</span>
                   <span style="color:var(--orange);font-weight:800;">${s.count} searches</span>
                 </div>
               `).join('') : `
@@ -1989,8 +2021,8 @@ class JobKhojApp {
               ${analytics.recentActivity.length > 0 ? analytics.recentActivity.slice(0, 7).map(act => `
                 <div style="display:flex;align-items:center;gap:10px;font-size:13px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
                   <span style="color:var(--orange);">●</span>
-                  <span style="flex:1;color:#CBD5E1;">${act.text}</span>
-                  <span style="color:#64748B;font-size:12px;">${act.time}</span>
+                  <span style="flex:1;color:#CBD5E1;">${this.escapeHtml(act.text || "")}</span>
+                  <span style="color:#64748B;font-size:12px;">${this.escapeHtml(act.time || "")}</span>
                 </div>
               `).join('') : `
                 <div style="color:#94A3B8;font-size:13px;padding:8px 0;">No visitor activity recorded yet. Views and clicks will be logged here.</div>
