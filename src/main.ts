@@ -136,6 +136,7 @@ class JobKhojApp {
     const redirect = JobKhojDataStore.getFeatures().redirectRules.find(r => r.enabled && r.from.replace(/^#/, '').replace(/^\//,'') === hash.replace(/^\//,''));
     if (redirect && redirect.to && redirect.to.replace(/^#/, '') !== hash) { const target=redirect.to.trim(); if(/^https?:\/\//i.test(target)){ window.location.assign(target); return; } history.replaceState({},'',this.routePath(target)); return void this.handleRouting(); }
     this.currentRoute = hash;
+    document.getElementById('jobposting-schema')?.remove();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.updateRouteSEO(hash);
 
@@ -187,6 +188,21 @@ class JobKhojApp {
   }
 
   private updateRouteSEO(route: string): void {
+    const removeMeta = (selector: string): void => {
+      document.head.querySelector(selector)?.remove();
+    };
+
+    removeMeta('meta[property="og:title"]');
+    removeMeta('meta[property="og:description"]');
+    removeMeta('meta[property="og:url"]');
+    removeMeta('meta[property="og:type"]');
+    removeMeta('meta[property="og:image"]');
+    removeMeta('meta[name="twitter:card"]');
+    removeMeta('meta[name="twitter:title"]');
+    removeMeta('meta[name="twitter:description"]');
+    removeMeta('meta[name="twitter:image"]');
+
+
     const f=JobKhojDataStore.getFeatures();
     let base=location.origin;
     if(f.seoCanonicalUrl){ try { const u=new URL(f.seoCanonicalUrl, location.origin); base=u.origin + u.pathname.replace(/\/$/,''); } catch {} }
@@ -196,10 +212,14 @@ class JobKhojApp {
     link.href=canonical;
     const titles:Record<string,string>={home:f.seoSiteTitle,jobs:`Latest Jobs | ${f.seoSiteTitle}`,exams:`Competitive Exams | ${f.seoSiteTitle}`,results:`Results | ${f.seoSiteTitle}`,'admit-cards':`Admit Cards | ${f.seoSiteTitle}`,blog:`Job News & Career Blog | ${f.seoSiteTitle}`};
     let description=f.seoSiteDescription;
-    if(route.startsWith('job/')){ const key=decodeURIComponent(route.slice(4)); const j=JobKhojDataStore.getJobs().find(x=>x.slug===key||x.id===key); if(j){ document.title=`${j.title} | ${f.seoSiteTitle}`; description=`${j.title} — ${j.org}. Vacancy: ${j.vacancies}. Qualification: ${j.qualification}. Last date: ${j.lastDate}.`; } else document.title=titles[route]||f.seoSiteTitle; }
-    else if(route.startsWith('article/')){ const key=decodeURIComponent(route.slice(8)); const a=JobKhojDataStore.getBlog().find(x=>x.slug===key||x.id===key); if(a){ document.title=a.seoTitle||`${a.title} | ${f.seoSiteTitle}`; description=a.seoDescription||a.excerpt||f.seoSiteDescription; } else document.title=titles[route]||f.seoSiteTitle; }
-    else document.title=titles[route]||f.seoSiteTitle;
+    let noindex=false;
+    if(route.startsWith('job/')){ const key=decodeURIComponent(route.slice(4)); const j=JobKhojDataStore.getJobs().find(x=>x.slug===key||x.id===key); if(j){ document.title=`${j.title} | ${f.seoSiteTitle}`; description=`${j.title} — ${j.org}. Vacancy: ${j.vacancies}. Qualification: ${j.qualification}. Last date: ${j.lastDate}.`; } else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; } }
+    else if(route.startsWith('article/')){ const key=decodeURIComponent(route.slice(8)); const a=JobKhojDataStore.getBlog().find(x=>x.slug===key||x.id===key); if(a){ document.title=a.seoTitle||`${a.title} | ${f.seoSiteTitle}`; description=a.seoDescription||a.excerpt||f.seoSiteDescription; } else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; } }
+    else if(titles[route]) document.title=titles[route];
+    else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; }
     let meta=document.querySelector('meta[name="description"]') as HTMLMetaElement|null; if(!meta){meta=document.createElement('meta');meta.name='description';document.head.appendChild(meta);} meta.content=description;
+    let keywords=document.querySelector('meta[name="keywords"]') as HTMLMetaElement|null; if(!keywords){keywords=document.createElement('meta');keywords.name='keywords';document.head.appendChild(keywords);} keywords.content=f.seoKeywords;
+    let robots=document.querySelector('meta[name="robots"]') as HTMLMetaElement|null; if(!robots){robots=document.createElement('meta');robots.name='robots';document.head.appendChild(robots);} robots.content=noindex?'noindex, nofollow':'index, follow';
   }
 
   private applySiteSEO(): void {
@@ -207,7 +227,7 @@ class JobKhojApp {
     document.title = f.seoSiteTitle;
     const setMeta = (name: string, content: string) => { let el = document.querySelector(`meta[name=\"${name}\"]`) as HTMLMetaElement | null; if (!el) { el=document.createElement('meta'); el.name=name; document.head.appendChild(el); } el.content=content; };
     setMeta('description', f.seoSiteDescription); setMeta('keywords', f.seoKeywords);
-    if (f.seoCanonicalUrl) { let link=document.querySelector('link[rel=\"canonical\"]') as HTMLLinkElement|null; if(!link){link=document.createElement('link');link.rel='canonical';document.head.appendChild(link);} link.href=f.seoCanonicalUrl; }
+
   }
 
   private renderNotFoundView(): void {
@@ -264,6 +284,9 @@ class JobKhojApp {
           else if (n==='href' || n==='src') { try { const u=new URL(v,location.origin); const allowedProtocols=(n==='src'?['https:']:['http:','https:']); if(!allowedProtocols.includes(u.protocol)) child.removeAttribute(attr.name); else child.setAttribute(attr.name,u.href); } catch { child.removeAttribute(attr.name); } }
           else if (!['class','id','title','alt','target','rel','width','height'].includes(n)) child.removeAttribute(attr.name);
         });
+        if (child.tagName === 'A' && child.getAttribute('target') === '_blank') {
+          child.setAttribute('rel', 'noopener noreferrer');
+        }
         walk(child);
       });
     };
@@ -1062,7 +1085,11 @@ class JobKhojApp {
       'police': 'Police',
       'apprentice': 'Apprentice'
     };
-    const catName = map[catKey.toLowerCase()] || 'Government';
+    const catName = map[catKey.toLowerCase()];
+    if (!catName) {
+      this.renderNotFoundView();
+      return;
+    }
     this.renderJobsView(catName);
   }
 
@@ -2387,29 +2414,29 @@ class JobKhojApp {
             <div class="admin-form-row">
               <div class="admin-form-group">
                 <label class="admin-form-label">Application Start Date</label>
-                <input type="text" id="m-start" class="admin-form-input" placeholder="e.g. 10 Feb 2026" value="${existing?.appStartDate || ''}">
+                <input type="text" id="m-start" class="admin-form-input" placeholder="e.g. 10 Feb 2026" value="${this.escapeHtml(existing?.appStartDate || '')}">
               </div>
 
               <div class="admin-form-group">
                 <label class="admin-form-label">Application Last Date *</label>
-                <input type="text" id="m-last" class="admin-form-input" required placeholder="e.g. 25 Mar 2026" value="${existing?.lastDate || ''}">
+                <input type="text" id="m-last" class="admin-form-input" required placeholder="e.g. 25 Mar 2026" value="${this.escapeHtml(existing?.lastDate || '')}">
               </div>
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Exam Date</label>
-              <input type="text" id="m-exam" class="admin-form-input" placeholder="e.g. May 2026" value="${existing?.examDate || ''}">
+              <input type="text" id="m-exam" class="admin-form-input" placeholder="e.g. May 2026" value="${this.escapeHtml(existing?.examDate || '')}">
             </div>
 
             <div class="admin-form-section-title">3. Fee & Selection</div>
             <div class="admin-form-group">
               <label class="admin-form-label">Application Fee</label>
-              <input type="text" id="m-fee" class="admin-form-input" value="${existing?.appFee || ''}">
+              <input type="text" id="m-fee" class="admin-form-input" value="${this.escapeHtml(existing?.appFee || '')}">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Selection Process</label>
-              <textarea id="m-selection" class="admin-form-textarea" rows="2">${existing?.selectionProcess || ''}</textarea>
+              <textarea id="m-selection" class="admin-form-textarea" rows="2">${this.escapeHtml(existing?.selectionProcess || '')}</textarea>
             </div>
 
             <div class="admin-form-section-title">4. Documents Required (Check those applicable)</div>
@@ -2425,29 +2452,29 @@ class JobKhojApp {
             <div class="admin-form-section-title">5. Description & Instructions</div>
             <div class="admin-form-group">
               <label class="admin-form-label">Job Description</label>
-              <textarea id="m-desc" class="admin-form-textarea" rows="3">${existing?.jobDesc || ''}</textarea>
+              <textarea id="m-desc" class="admin-form-textarea" rows="3">${this.escapeHtml(existing?.jobDesc || '')}</textarea>
             </div>
 
             <div class="admin-form-section-title">6. Important Links</div>
             <div class="admin-form-group">
               <label class="admin-form-label">Official Notification URL</label>
-              <input type="url" id="m-notif-url" class="admin-form-input" value="${existing?.officialNotifUrl || 'https://'}">
+              <input type="url" id="m-notif-url" class="admin-form-input" value="${this.escapeHtml(existing?.officialNotifUrl || 'https://')}">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Official Website URL</label>
-              <input type="url" id="m-web-url" class="admin-form-input" value="${existing?.officialWebsiteUrl || 'https://'}">
+              <input type="url" id="m-web-url" class="admin-form-input" value="${this.escapeHtml(existing?.officialWebsiteUrl || 'https://')}">
             </div>
 
             <div class="admin-form-group">
               <label class="admin-form-label">Apply Now URL</label>
-              <input type="url" id="m-apply-url" class="admin-form-input" value="${existing?.applyUrl || 'https://'}">
+              <input type="url" id="m-apply-url" class="admin-form-input" value="${this.escapeHtml(existing?.applyUrl || 'https://')}">
             </div>
 
             <div class="admin-form-section-title">7. URL Slug & Publishing</div>
             <div class="admin-form-group">
               <label class="admin-form-label">URL Slug (Auto-generated or custom)</label>
-              <input type="text" id="m-slug" class="admin-form-input" value="${existing?.slug || ''}">
+              <input type="text" id="m-slug" class="admin-form-input" value="${this.escapeHtml(existing?.slug || '')}">
             </div>
 
             <div class="flex items-center gap-6" style="margin-top:10px;">
@@ -3025,8 +3052,10 @@ class JobKhojApp {
       if (cell.length || row.length) { row.push(cell.trim()); if (row.some(v => v !== '')) rows.push(row); }
       return rows;
     };
-    const normaliseCategory = (value: string): JobItem['category'] => {
-      const v = value.toLowerCase();
+    const normaliseCategory = (value: string): JobItem['category'] | null => {
+      const v = value.trim().toLowerCase();
+      if (!v) return 'Government';
+      if (v === 'government' || v.includes('govt') || v.includes('government')) return 'Government';
       if (v.includes('bank')) return 'Bank';
       if (v.includes('rail')) return 'Railway';
       if (v.includes('teach')) return 'Teaching';
@@ -3034,7 +3063,7 @@ class JobKhojApp {
       if (v.includes('police')) return 'Police';
       if (v.includes('apprent')) return 'Apprentice';
       if (v.includes('private')) return 'Private';
-      return 'Government';
+      return null;
     };
     document.getElementById('csv-import-input')?.addEventListener('change',(ev)=>{ if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}
       const input = ev.target as HTMLInputElement;
@@ -3056,18 +3085,34 @@ class JobKhojApp {
             const vals = rows[i];
             if(vals.length !== rows[0].length){ invalidRows++; continue; }
             const get = (n:string) => { const nidx=idx(n); return nidx >= 0 ? (vals[nidx] || '') : ''; };
-            const validDate=(v:string)=>!v || !Number.isNaN(Date.parse(v));
+            const validDate=(v:string)=>{
+              if(!v) return true;
+              const value=v.trim();
+              const m=value.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+              if(m){
+                const day=Number(m[1]), month=Number(m[2]), year=Number(m[3]);
+                const d=new Date(Date.UTC(year, month-1, day));
+                return d.getUTCFullYear()===year && d.getUTCMonth()===month-1 && d.getUTCDate()===day;
+              }
+              const d=new Date(value);
+              return !Number.isNaN(d.getTime());
+            };
             const validUrl=(v:string)=>!v || /^https:\/\//i.test(v);
             const title=get('title').trim(), org=get('organization').trim();
             if (!title || !org || !validDate(get('start_date')) || !validDate(get('last_date')) || !validDate(get('exam_date')) || !validUrl(get('apply_url')) || !validUrl(get('notification_url')) || !validUrl(get('official_url'))) { invalidRows++; continue; }
-            const startDate=Date.parse(get('start_date')); const endDate=Date.parse(get('last_date'));
+            const startValue=get('start_date').trim();
+            const endValue=get('last_date').trim();
+            const startDate=startValue ? new Date(startValue).getTime() : NaN;
+            const endDate=endValue ? new Date(endValue).getTime() : NaN;
             if(!Number.isNaN(startDate)&&!Number.isNaN(endDate)&&startDate>endDate){invalidRows++;continue;}
+            const category=normaliseCategory(get('category'));
+            if (!category) { invalidRows++; continue; }
             const baseSlug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || `job-${crypto.randomUUID()}`;
             const rawStatus=get('status').toLowerCase();
             const published = ['published','open','active','live','yes'].includes(rawStatus);
             const jobStatus: JobItem['status'] = rawStatus.includes('expired') ? 'Expired' : (rawStatus.includes('closing') ? 'Closing Soon' : 'Active');
             imported.push({
-              id:crypto.randomUUID(), title, org, post:get('post'), category:normaliseCategory(get('category')), jobType:(['permanent','contractual','apprentice','full time','full-time'].includes(get('job_type').toLowerCase()) ? (get('job_type').toLowerCase().includes('contract')?'Contractual':get('job_type').toLowerCase().includes('apprent')?'Apprentice':get('job_type').toLowerCase().includes('full')?'Full Time':'Permanent') : 'Permanent'), vacancies:get('vacancy')||'Various Posts',
+              id:crypto.randomUUID(), title, org, post:get('post'), category, jobType:(['permanent','contractual','apprentice','full time','full-time'].includes(get('job_type').toLowerCase()) ? (get('job_type').toLowerCase().includes('contract')?'Contractual':get('job_type').toLowerCase().includes('apprent')?'Apprentice':get('job_type').toLowerCase().includes('full')?'Full Time':'Permanent') : 'Permanent'), vacancies:get('vacancy')||'Various Posts',
               qualification:get('qualification'), location:get('location')||'All India', salary:get('salary')||'As per norms', ageLimit:get('age_limit')||'As per rules',
               appStartDate:get('start_date'), lastDate:get('last_date'), examDate:get('exam_date')||'To be announced',
               appFee:get('application_fee')||'Refer notification', selectionProcess:get('selection_process')||'Written Exam & Document Verification',
