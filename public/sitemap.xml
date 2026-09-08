@@ -3,4 +3,19 @@
   <url>
     <loc>https://job-khoj.jobkhojsupport.workers.dev/</loc>
   </url>
+  <url>
+    <loc>https://job-khoj.jobkhojsupport.workers.dev/jobs</loc>
+  </url>
+  <url>
+    <loc>https://job-khoj.jobkhojsupport.workers.dev/exams</loc>
+  </url>
+  <url>
+    <loc>https://job-khoj.jobkhojsupport.workers.dev/results</loc>
+  </url>
+  <url>
+    <loc>https://job-khoj.jobkhojsupport.workers.dev/admit-cards</loc>
+  </url>
+  <url>
+    <loc>https://job-khoj.jobkhojsupport.workers.dev/blog</loc>
+  </url>
 </urlset>
