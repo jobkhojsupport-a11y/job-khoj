@@ -1094,7 +1094,7 @@ class JobKhojApp {
     const settings = JobKhojDataStore.getSettings();
 
     // SEO: JobPosting structured data
-    const jobDatePosted = this.normalizeSeoDate(job.postedDate);
+    const parsedPostedDate = new Date(job.postedDate); const jobDatePosted = this.normalizeSeoDate(job.postedDate) || (Number.isNaN(parsedPostedDate.getTime()) ? "" : parsedPostedDate.toISOString().slice(0, 10));
     const jobValidThrough = this.normalizeSeoDate(job.lastDate);
 
     const jobSchema: Record<string, any> = {
