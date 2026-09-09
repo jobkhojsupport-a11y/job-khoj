@@ -66,15 +66,25 @@ export class JobKhojDataStore {
  private static previousIds:Record<Kind,Set<string>>={jobs:new Set(),exams:new Set(),results:new Set(),admit_cards:new Set(),blog:new Set()};
  static async loadAll():Promise<void>{
    this.remoteAvailable=false;
-   try{
-     const {data,error}=await supabase.from('content_records').select('kind,id,payload,published');
-     if(error)throw error;
-     for(const kind of ['jobs','exams','results','admit_cards','blog'] as Kind[]){const vals=(data||[]).filter((r:any)=>r.kind===kind).map((r:any)=>({...r.payload,id:String(r.id),published:Boolean(r.published)})); this.setCache(kind,vals); this.previousIds[kind]=new Set(vals.map((x:any)=>String(x.id)));}
-     this.remoteAvailable=true;
-   }catch(e){console.error('Content database read failed',e);this.jobsCache=[];this.examsCache=[];this.resultsCache=[];this.admitCardsCache=[];this.blogCache=[];}
-   try{const {data,error}=await supabase.from('site_config').select('key,value').in('key',['settings','features']);if(error)throw error;for(const r of data||[]){if(r.key==='settings')this.settingsCache={...INITIAL_SETTINGS,...(r.value||{})};if(r.key==='features')this.featuresCache={...INITIAL_FEATURES,...(r.value||{}),adminUsers:[]};}}catch(e){console.error('Site configuration read failed',e);}
-   try{const {data,error}=await supabase.from('ad_slots').select('id,title,location_name,html_content,enabled');if(error)throw error;this.adSlotsCache=(data||[]).map((a:any)=>({id:a.id,title:a.title,locationName:a.location_name,htmlContent:a.html_content||'',enabled:Boolean(a.enabled)}));}catch(e){console.error('Ad slot read failed',e);}
-   await this.loadAnalytics(); this.loaded=true;
+   const contentTask=(async()=>{
+     try{
+       const {data,error}=await supabase.from('content_records').select('kind,id,payload,published');
+       if(error)throw error;
+       for(const kind of ['jobs','exams','results','admit_cards','blog'] as Kind[]){const vals=(data||[]).filter((r:any)=>r.kind===kind).map((r:any)=>({...r.payload,id:String(r.id),published:Boolean(r.published)})); this.setCache(kind,vals); this.previousIds[kind]=new Set(vals.map((x:any)=>String(x.id)));}
+       this.remoteAvailable=true;
+     }catch(e){console.error('Content database read failed',e);this.jobsCache=[];this.examsCache=[];this.resultsCache=[];this.admitCardsCache=[];this.blogCache=[];}
+   })();
+   const configTask=(async()=>{
+     try{const {data,error}=await supabase.from('site_config').select('key,value').in('key',['settings','features']);if(error)throw error;for(const r of data||[]){if(r.key==='settings')this.settingsCache={...INITIAL_SETTINGS,...(r.value||{})};if(r.key==='features')this.featuresCache={...INITIAL_FEATURES,...(r.value||{}),adminUsers:[]};}}
+     catch(e){console.error('Site configuration read failed',e);}
+   })();
+   const adsTask=(async()=>{
+     try{const {data,error}=await supabase.from('ad_slots').select('id,title,location_name,html_content,enabled');if(error)throw error;this.adSlotsCache=(data||[]).map((a:any)=>({id:a.id,title:a.title,locationName:a.location_name,htmlContent:a.html_content||'',enabled:Boolean(a.enabled)}))}
+     catch(e){console.error('Ad slot read failed',e);}
+   })();
+   await Promise.all([contentTask,configTask,adsTask]);
+   this.loaded=true;
+   void this.loadAnalytics();
  }
  private static async ensureRemote(){if(!this.remoteAvailable)throw new Error('Database is unavailable. No changes were saved.');}
  private static async saveRecord(kind:Kind,item:any):Promise<void>{

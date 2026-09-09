@@ -27,10 +27,7 @@ class JobKhojApp {
     this.applySiteSEO();
 
     // Load remote data without blocking the initial render.
-    void Promise.all([
-      JobKhojDataStore.loadAll(),
-      JobKhojDataStore.loadAdSlots()
-    ]).then(() => {
+    void JobKhojDataStore.loadAll().then(() => {
       this.handleRouting();
     }).catch((error) => {
       console.error("Remote data load failed:", error);
