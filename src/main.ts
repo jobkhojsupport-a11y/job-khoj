@@ -502,7 +502,7 @@ class JobKhojApp {
               </a>
               <p class="footer-brand-desc">${this.escapeHtml(settings.footerAboutText)}</p>
               <div class="footer-contact-info">
-                Support: <a href="mailto:${this.escapeHtml(settings.supportEmail)}">${this.escapeHtml(settings.supportEmail)}</a>
+                Support: <a href="mailto:${this.escapeHtml(settings.supportEmail)}" aria-label="Email support">${this.escapeHtml(settings.supportEmail)}</a>
               </div>
             </div>
 
@@ -600,7 +600,7 @@ class JobKhojApp {
           <div class="search-bar-wrapper">
             <form class="hero-search-form" id="home-search-form">
               <input type="text" id="home-search-input" class="search-input" placeholder="Search jobs, exams, organizations or keywords..." autocomplete="off">
-              <button type="submit" class="search-submit-btn">
+              <button type="submit" class="search-submit-btn" aria-label="Search jobs">
                 ${Icons.search}
                 <span>SEARCH</span>
               </button>
