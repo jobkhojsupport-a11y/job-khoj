@@ -24,9 +24,17 @@ class JobKhojApp {
   }
 
  private async init(): Promise<void> {
-  await JobKhojDataStore.loadAll();
-    await JobKhojDataStore.loadAdSlots();
     this.applySiteSEO();
+
+    // Load remote data without blocking the initial render.
+    void Promise.all([
+      JobKhojDataStore.loadAll(),
+      JobKhojDataStore.loadAdSlots()
+    ]).then(() => {
+      this.handleRouting();
+    }).catch((error) => {
+      console.error("Remote data load failed:", error);
+    });
     document.addEventListener('click', (e) => { const target = e.target as HTMLElement; if (target?.closest('.ad-slot-container a')) JobKhojDataStore.incrementStat('applyClicks', 'Advertisement link clicked'); });
     // Record page view in aggregate analytics
     JobKhojDataStore.incrementStat('totalPageViews');
@@ -45,8 +53,31 @@ class JobKhojApp {
       history.replaceState({}, '', '/admin');
     }
 
+    this.setupAccessibilityKeyboard();
     // Initial render
     this.handleRouting();
+  }
+
+  private setupAccessibilityKeyboard(): void {
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      const category = target.closest(".category-card") as HTMLElement | null;
+      if (category) {
+        event.preventDefault();
+        category.click();
+        return;
+      }
+
+      const keyword = target.closest(".keyword-pill") as HTMLElement | null;
+      if (keyword) {
+        event.preventDefault();
+        keyword.click();
+      }
+    });
   }
 
   private async verifyAdminSession(): Promise<boolean> {
@@ -420,7 +451,7 @@ class JobKhojApp {
                 </div>
               </div>
             </div>
-            <button id="mobile-drawer-close" style="background:none;border:none;cursor:pointer;color:var(--navy);">
+            <button id="mobile-drawer-close" aria-label="Close navigation menu" style="background:none;border:none;cursor:pointer;color:var(--navy);">
               ${Icons.x}
             </button>
           </div>
@@ -451,7 +482,7 @@ class JobKhojApp {
       <!-- Main Content Container where page views render -->
       <main id="app-main-content" class="flex-1"></main>
 
-      ${JobKhojDataStore.getFeatures().popupEnabled ? `<div id="site-alert-popup" style="position:fixed;right:18px;bottom:18px;max-width:360px;background:#fff;border:1px solid #E2E8F0;border-radius:16px;box-shadow:0 20px 50px rgba(15,23,42,.18);padding:18px;z-index:9999;display:none;"><button id="site-alert-close" style="position:absolute;right:10px;top:8px;border:0;background:none;font-size:20px;cursor:pointer;">×</button><strong style="font-size:17px;color:#0F172A;display:block;margin-bottom:7px;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupTitle)}</strong><p style="font-size:13px;color:#64748B;line-height:1.5;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupMessage)}</p><a href="${this.escapeHtml(JobKhojDataStore.getFeatures().popupUrl || "/")}" class="btn-admin-action-primary" style="display:inline-block;text-decoration:none;">VIEW UPDATES</a>${JobKhojDataStore.getFeatures().pushNotificationsEnabled ? '<button id="enable-push-btn" class="btn-table-action" style="margin-left:8px;">ENABLE ALERTS</button>' : ''}</div>` : ''}
+      ${JobKhojDataStore.getFeatures().popupEnabled ? `<div id="site-alert-popup" style="position:fixed;right:18px;bottom:18px;max-width:360px;background:#fff;border:1px solid #E2E8F0;border-radius:16px;box-shadow:0 20px 50px rgba(15,23,42,.18);padding:18px;z-index:9999;display:none;"><button id="site-alert-close" aria-label="Close notification" style="position:absolute;right:10px;top:8px;border:0;background:none;font-size:20px;cursor:pointer;">×</button><strong style="font-size:17px;color:#0F172A;display:block;margin-bottom:7px;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupTitle)}</strong><p style="font-size:13px;color:#64748B;line-height:1.5;">${this.escapeHtml(JobKhojDataStore.getFeatures().popupMessage)}</p><a href="${this.escapeHtml(JobKhojDataStore.getFeatures().popupUrl || "/")}" class="btn-admin-action-primary" style="display:inline-block;text-decoration:none;">VIEW UPDATES</a>${JobKhojDataStore.getFeatures().pushNotificationsEnabled ? '<button id="enable-push-btn" class="btn-table-action" style="margin-left:8px;">ENABLE ALERTS</button>' : ''}</div>` : ''}
 
       <!-- Public Footer -->
       <footer class="site-footer" id="site-footer">
@@ -579,13 +610,13 @@ class JobKhojApp {
           <!-- Popular Keywords -->
           <div class="popular-keywords">
             <span class="popular-label">POPULAR:</span>
-            <span class="keyword-pill" data-keyword="10th Pass">10th Pass</span>
+            <span class="keyword-pill" role="button" tabindex="0" aria-label="Search keyword" data-keyword="10th Pass">10th Pass</span>
             <span>•</span>
-            <span class="keyword-pill" data-keyword="12th Pass">12th Pass</span>
+            <span class="keyword-pill" role="button" tabindex="0" aria-label="Search keyword" data-keyword="12th Pass">12th Pass</span>
             <span>•</span>
-            <span class="keyword-pill" data-keyword="Graduate">Graduate</span>
+            <span class="keyword-pill" role="button" tabindex="0" aria-label="Search keyword" data-keyword="Graduate">Graduate</span>
             <span>•</span>
-            <span class="keyword-pill" data-keyword="Fresher">Fresher</span>
+            <span class="keyword-pill" role="button" tabindex="0" aria-label="Search keyword" data-keyword="Fresher">Fresher</span>
           </div>
         </div>
       </section>
@@ -605,7 +636,7 @@ class JobKhojApp {
         </div>
 
         <div class="category-grid">
-          <div class="category-card" data-cat="govt">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="govt">
             <div class="category-icon-box">${Icons.building}</div>
             <div class="category-info">
               <div class="category-name">GOVT JOBS</div>
@@ -613,7 +644,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="private">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="private">
             <div class="category-icon-box">${Icons.briefcase}</div>
             <div class="category-info">
               <div class="category-name">PRIVATE</div>
@@ -621,7 +652,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="bank">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="bank">
             <div class="category-icon-box">${Icons.bank}</div>
             <div class="category-info">
               <div class="category-name">BANK JOBS</div>
@@ -629,7 +660,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="railway">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="railway">
             <div class="category-icon-box">${Icons.train}</div>
             <div class="category-info">
               <div class="category-name">RAILWAY</div>
@@ -637,7 +668,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="teaching">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="teaching">
             <div class="category-icon-box">${Icons.graduation}</div>
             <div class="category-info">
               <div class="category-name">TEACHING</div>
@@ -645,7 +676,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="defence">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="defence">
             <div class="category-icon-box">${Icons.defence}</div>
             <div class="category-info">
               <div class="category-name">DEFENCE</div>
@@ -653,7 +684,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="police">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="police">
             <div class="category-icon-box">${Icons.police}</div>
             <div class="category-info">
               <div class="category-name">POLICE</div>
@@ -661,7 +692,7 @@ class JobKhojApp {
             </div>
           </div>
 
-          <div class="category-card" data-cat="apprentice">
+          <div class="category-card" role="link" tabindex="0" aria-label="Browse jobs in this category" data-cat="apprentice">
             <div class="category-icon-box">${Icons.tools}</div>
             <div class="category-info">
               <div class="category-name">APPRENTICE</div>

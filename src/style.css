@@ -19,8 +19,8 @@
   --bg-light: #F8FAFC;
   --border: #E7EBF0;
   --border-subtle: #F1F4F8;
-  --muted: #7B8494;
-  --text-muted: #7B8494;
+  --muted: #475569;
+  --text-muted: #475569;
   --text-dark: #07152F;
   --text-sub: #4A5568;
   --font-sans: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -378,7 +378,7 @@ button, input, select, textarea {
 }
 
 .search-input::placeholder {
-  color: #9AA3B2;
+  color: #64748B;
 }
 
 .search-submit-btn {
@@ -475,7 +475,7 @@ button, input, select, textarea {
   font-size: 9.5px;
   font-weight: 800;
   letter-spacing: 1px;
-  color: #A08C78;
+  color: #6B5B4D;
   text-transform: uppercase;
 }
 
@@ -755,7 +755,7 @@ button, input, select, textarea {
 
 .status-expired {
   background: #F1F3F5;
-  color: #868E96;
+  color: #475569;
 }
 
 .job-meta-grid {
@@ -1171,7 +1171,7 @@ button, input, select, textarea {
 }
 
 .admin-access-link {
-  color: #A0AAB8;
+  color: #64748B;
   font-size: 11px;
   cursor: pointer;
   text-decoration: none;
@@ -2543,4 +2543,34 @@ body { background: #F7FAFD; }
   .category-grid { grid-template-columns:repeat(2,1fr); }
   .job-card { padding:13px; }
   .social-cta-btn { padding:9px 12px; }
+}
+
+/* Lighthouse: accessible mobile touch targets */
+@media (max-width: 768px) {
+  .mobile-drawer-nav .nav-link,
+  .category-card,
+  .keyword-pill,
+  .view-all-link,
+  .btn-view-details,
+  .btn-apply-now,
+  .btn-item-action,
+  #mobile-drawer-close,
+  #site-alert-close {
+    min-height: 48px;
+  }
+
+  .keyword-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* Lighthouse: visible keyboard focus */
+.category-card:focus-visible,
+.keyword-pill:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid currentColor;
+  outline-offset: 2px;
 }
