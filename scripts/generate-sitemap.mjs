@@ -14,7 +14,7 @@ const SUPABASE_KEY =
   process.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ||
   process.env.VITE_SUPABASE_ANON_KEY?.trim();
 
-const SITE_URL = 'https://job-khoj.jobkhojsupport.workers.dev';
+const SITE_URL = 'https://jobkhoj.in';
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error(

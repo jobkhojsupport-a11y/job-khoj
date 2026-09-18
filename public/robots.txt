@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 Disallow: /admin
-Sitemap: https://job-khoj.jobkhojsupport.workers.dev/sitemap.xml
+Sitemap: https://jobkhoj.in/sitemap.xml
