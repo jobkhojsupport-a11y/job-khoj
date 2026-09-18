@@ -165,6 +165,7 @@ class JobKhojApp {
     if (redirect && redirect.to && redirect.to.replace(/^#/, '') !== hash) { const target=redirect.to.trim(); if(/^https?:\/\//i.test(target)){ window.location.assign(target); return; } history.replaceState({},'',this.routePath(target)); return void this.handleRouting(); }
     this.currentRoute = hash;
     document.getElementById('jobposting-schema')?.remove();
+    document.getElementById('article-schema')?.remove();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     this.updateRouteSEO(hash);
 
@@ -1121,6 +1122,20 @@ class JobKhojApp {
     this.renderJobsView(catName);
   }
 
+  private jobSchemaDescription(job: JobItem): string {
+    const parts = [
+      `<p>${this.escapeHtml(job.jobDesc || `${job.title} recruitment notification by ${job.org}.`)}</p>`,
+      job.qualification ? `<p><strong>Qualification:</strong> ${this.escapeHtml(job.qualification)}</p>` : '',
+      job.vacancies ? `<p><strong>Vacancies:</strong> ${this.escapeHtml(job.vacancies)}</p>` : '',
+      job.location ? `<p><strong>Location:</strong> ${this.escapeHtml(job.location)}</p>` : '',
+      job.ageLimit ? `<p><strong>Age limit:</strong> ${this.escapeHtml(job.ageLimit)}</p>` : '',
+      job.selectionProcess ? `<p><strong>Selection process:</strong> ${this.escapeHtml(job.selectionProcess)}</p>` : '',
+      job.salary ? `<p><strong>Salary:</strong> ${this.escapeHtml(job.salary)}</p>` : '',
+      job.lastDate ? `<p><strong>Last date:</strong> ${this.escapeHtml(job.lastDate)}</p>` : ''
+    ];
+    return parts.filter(Boolean).join(' ');
+  }
+
   // =========================================================================
   // JOB DETAILS VIEW
   // =========================================================================
@@ -1150,7 +1165,7 @@ class JobKhojApp {
 
     // SEO: dynamic metadata for this individual job page
     const seoTitle = `${job.title} – ${job.org} | Job Khoj`;
-    const seoDescription = `${job.title} recruitment by ${job.org}. Check vacancies, eligibility, important dates, application details, selection process and apply online on Job Khoj.`.slice(0, 160);
+    const seoDescription = `${job.title} recruitment by ${job.org}. ${job.vacancies ? `${job.vacancies} vacancies. ` : ''}${job.qualification ? `Eligibility: ${job.qualification}. ` : ''}${job.location ? `Location: ${job.location}. ` : ''}${job.lastDate ? `Last date: ${job.lastDate}.` : ''}`.replace(/\s+/g, ' ').trim().slice(0, 160);
     const seoUrl = `${location.origin}/job/${encodeURIComponent(job.slug || job.id)}`;
 
     const setSeoMeta = (selector: string, attribute: string, key: string, value: string) => {
@@ -1198,7 +1213,7 @@ class JobKhojApp {
       "@context": "https://schema.org",
       "@type": "JobPosting",
       "title": job.title,
-      "description": job.jobDesc || `${job.title} recruitment notification by ${job.org}.`,
+      "description": this.jobSchemaDescription(job),
       "datePosted": jobDatePosted,
       "identifier": {
         "@type": "PropertyValue",
@@ -1207,7 +1222,8 @@ class JobKhojApp {
       },
       "hiringOrganization": {
         "@type": "Organization",
-        "name": job.org
+        "name": job.org,
+        "logo": `${location.origin}/icon-512.png`
       },
       "employmentType": job.jobType,
       "url": `${location.origin}/job/${encodeURIComponent(job.slug || job.id)}`
@@ -1222,6 +1238,7 @@ class JobKhojApp {
         "@type": "Place",
         "address": {
           "@type": "PostalAddress",
+          "addressLocality": job.location,
           "addressCountry": "IN"
         }
       };
@@ -1391,6 +1408,15 @@ class JobKhojApp {
               ` : ''}
             </div>
           </div>
+
+          ${(() => {
+            const related = JobKhojDataStore.getJobs().filter(j => j.published && j.id !== job.id && (j.category === job.category || j.org === job.org)).slice(0, 6);
+            if (!related.length) return '';
+            return `<section class="detail-section" aria-labelledby="related-jobs-heading">
+              <h2 id="related-jobs-heading" class="detail-section-title">Related ${this.escapeHtml(job.category || '')} Jobs</h2>
+              <div class="job-cards-list">${related.map(r => `<a href="/job/${encodeURIComponent(r.slug || r.id)}" class="job-card" style="display:block;text-decoration:none;color:inherit;"><h3 class="job-card-title">${this.escapeHtml(r.title)}</h3><div class="job-card-org">${this.escapeHtml(r.org)}</div><div class="job-card-footer"><span>${this.escapeHtml(r.vacancies || '')} vacancies</span><span>View job →</span></div></a>`).join('')}</div>
+            </section>`;
+          })()}
 
           <!-- Disclaimer Box -->
           <div class="footer-disclaimer-box" style="margin-bottom:0;">
@@ -1608,7 +1634,7 @@ class JobKhojApp {
         <div class="blog-grid">
           ${articles.length > 0 ? articles.map(art => `
             <article class="blog-card">
-              <img src="${this.escapeHtml(art.featuredImage || "")}" alt="${this.escapeHtml(art.title || '')}" class="blog-card-img" loading="lazy">
+              <img src="${this.escapeHtml(art.featuredImage || "")}" alt="${this.escapeHtml(art.title || '')}" class="blog-card-img" loading="lazy" decoding="async">
               <div class="blog-card-body">
                 <span class="blog-category-tag">${this.escapeHtml(art.category || '')}</span>
                 <h3 class="blog-card-title" data-art-slug="${this.escapeHtml(art.slug || art.id)}">${this.escapeHtml(art.title || '')}</h3>
@@ -1660,6 +1686,23 @@ class JobKhojApp {
       return;
     }
 
+    const articleSchema = {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": article.title,
+      "description": article.seoDescription || article.excerpt || article.title,
+      "datePublished": this.normalizeSeoDate(article.publishedDate) || undefined,
+      "author": { "@type": "Person", "name": article.author || "Job Khoj Editorial Team" },
+      "publisher": { "@type": "Organization", "name": "Job Khoj", "logo": { "@type": "ImageObject", "url": `${location.origin}/icon-512.png` } },
+      "mainEntityOfPage": `${location.origin}/article/${encodeURIComponent(article.slug || article.id)}`
+    };
+    document.getElementById('article-schema')?.remove();
+    const articleSchemaScript = document.createElement('script');
+    articleSchemaScript.id = 'article-schema';
+    articleSchemaScript.type = 'application/ld+json';
+    articleSchemaScript.textContent = JSON.stringify(articleSchema);
+    document.head.appendChild(articleSchemaScript);
+
     main.innerHTML = `
       <div class="container" style="padding-top: 24px; padding-bottom: 64px; max-width: 860px;">
         <nav class="breadcrumb-nav">
@@ -1680,7 +1723,7 @@ class JobKhojApp {
             <span>Published: <strong>${this.escapeHtml(article.publishedDate || '')}</strong></span>
           </div>
 
-          <img src="${this.escapeHtml(article.featuredImage || "")}" alt="${this.escapeHtml(article.title || '')}" style="width:100%; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;">
+          <img src="${this.escapeHtml(article.featuredImage || "")}" alt="${this.escapeHtml(article.title || '')}" loading="lazy" decoding="async" style="width:100%; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;">
 
           <div class="detail-text-content" style="font-size:16px; line-height:1.8;">
             ${this.sanitizeAdHtml(article.content || '')}
@@ -2556,9 +2599,21 @@ class JobKhojApp {
 
       const title = titleInput.value.trim();
       const org = (document.getElementById('m-org') as HTMLInputElement).value.trim();
+      const jobDescription = (document.getElementById('m-desc') as HTMLTextAreaElement).value.trim();
+      const qualification = (document.getElementById('m-qual') as HTMLInputElement).value.trim();
+      const location = (document.getElementById('m-location') as HTMLInputElement).value.trim();
+      const applyUrl = (document.getElementById('m-apply-url') as HTMLInputElement).value.trim();
+      const notificationUrl = (document.getElementById('m-notif-url') as HTMLInputElement).value.trim();
       if (!title || !org) {
         alert('Please fill in required fields: Job Title and Organization.');
         return;
+      }
+      if (publishedState) {
+        if (jobDescription.length < 160) { alert('Please add a complete, original job summary of at least 160 characters before publishing.'); return; }
+        if (!qualification || !location) { alert('Published jobs need qualification and job location details.'); return; }
+        for (const [label, value] of [['Official notification', notificationUrl], ['Apply online', applyUrl]] as const) {
+          try { const u = new URL(value); if (u.protocol !== 'https:') throw new Error(); } catch { alert(`${label} must be a valid HTTPS URL.`); return; }
+        }
       }
 
       let slug = slugInput.value.trim();
