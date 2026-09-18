@@ -1,3 +1,0 @@
-name = "job-khoj-indexing-api"
-main = "workers/indexing-api/index.ts"
-compatibility_date = "2026-09-07"

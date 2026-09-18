@@ -93,15 +93,3 @@ npm run verify
 ```
 
 GitHub Actions also runs `npm ci`, the application and Vite-config type checks, and `npm run build` on pushes and pull requests to `main`/`master`.
-
-
-## SEO and Google Jobs setup
-
-- Published job pages output `JobPosting` JSON-LD only on individual job pages.
-- The build-time sitemap includes published jobs and published articles and uses `lastmod` from `content_records.updated_at`.
-- Related published jobs are linked on each job detail page to strengthen internal discovery.
-- The indexing worker in `workers/indexing-api/` is ready for Google Indexing API notifications. Deploy it separately and keep its service-account credentials in Wrangler secrets.
-
-### Google Indexing API worker
-
-Enable the Indexing API in Google Cloud, create a service account, grant that service account access to the verified Search Console property as required by Google, then deploy `wrangler.indexing-api.toml`. Set these secrets with Wrangler: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`, and `INDEXING_NOTIFY_SECRET`. Never commit the service-account JSON or private key.

@@ -26,32 +26,33 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const { data, error } = await supabase
   .from('content_records')
-  .select('kind,id,payload,published,updated_at')
-  .in('kind', ['jobs', 'blog'])
+  .select('id,payload,published')
+  .eq('kind', 'jobs')
   .eq('published', true);
 
 if (error) throw error;
 
 const urls = [
-  { path: '/', lastmod: null },
-  { path: '/jobs', lastmod: null },
-  { path: '/exams', lastmod: null },
-  { path: '/results', lastmod: null },
-  { path: '/admit-cards', lastmod: null },
-  { path: '/blog', lastmod: null }
+  '/',
+  '/jobs',
+  '/exams',
+  '/results',
+  '/admit-cards',
+  '/blog'
 ];
 
 for (const row of data || []) {
-  const payload = row.payload || {};
-  const slug = String(payload.slug || row.id || '').trim();
-  if (!slug) continue;
-  urls.push({
-    path: `/${row.kind === 'jobs' ? 'job' : 'article'}/${encodeURIComponent(slug)}`,
-    lastmod: row.updated_at ? String(row.updated_at).slice(0, 10) : null
-  });
+  const job = row.payload || {};
+  const id = String(row.id || job.id || '').trim();
+  const slug = String(job.slug || '').trim();
+
+  if (!id) continue;
+
+  const key = slug || id;
+  urls.push(`/job/${encodeURIComponent(key)}`);
 }
 
-const uniqueUrls = [...new Map(urls.map(item => [item.path, item])).values()];
+const uniqueUrls = [...new Set(urls)];
 
 const escapeXml = (value) =>
   value.replace(/&/g, '&amp;')
@@ -62,8 +63,8 @@ const escapeXml = (value) =>
 
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${uniqueUrls.map(({path,lastmod}) =>
-  `  <url><loc>${escapeXml(SITE_URL + path)}</loc>${lastmod ? `<lastmod>${escapeXml(lastmod)}</lastmod>` : ''}</url>`
+${uniqueUrls.map(path =>
+  `  <url><loc>${escapeXml(SITE_URL + path)}</loc></url>`
 ).join('\n')}
 </urlset>
 `;
@@ -71,6 +72,4 @@ ${uniqueUrls.map(({path,lastmod}) =>
 fs.writeFileSync('public/sitemap.xml', xml);
 
 console.log(`✅ Sitemap generated with ${uniqueUrls.length} URLs.`);
-console.log(`   Published content records: ${(data || []).length}`);
-console.log(`   Published jobs: ${(data || []).filter(r => r.kind === 'jobs').length}`);
-console.log(`   Published articles: ${(data || []).filter(r => r.kind === 'blog').length}`);
+console.log(`   Published jobs: ${(data || []).length}`);
