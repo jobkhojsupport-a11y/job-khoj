@@ -1369,19 +1369,25 @@ class JobKhojApp {
             </p>
 
             <div class="links-grid">
-              <a href="${this.escapeHtml(job.officialNotifUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-notif">
-                ${Icons.file}
-                <span>OFFICIAL NOTIFICATION</span>
-              </a>
+              ${job.showOfficialNotificationButton !== false && job.officialNotifUrl ? `
+                <a href="${this.escapeHtml(job.officialNotifUrl)}" target="_blank" rel="noopener noreferrer" class="official-action-link link-notif">
+                  ${Icons.file}
+                  <span>OFFICIAL NOTIFICATION</span>
+                </a>
+              ` : ''}
 
-              <a href="${this.escapeHtml(job.officialWebsiteUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-website">
-                ${Icons.external}
-                <span>OFFICIAL WEBSITE</span>
-              </a>
+              ${job.showOfficialWebsiteButton !== false && job.officialWebsiteUrl ? `
+                <a href="${this.escapeHtml(job.officialWebsiteUrl)}" target="_blank" rel="noopener noreferrer" class="official-action-link link-website">
+                  ${Icons.external}
+                  <span>OFFICIAL WEBSITE</span>
+                </a>
+              ` : ''}
 
-              <a href="${this.escapeHtml(job.applyUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-apply" id="detail-apply-btn">
-                <span>APPLY ONLINE NOW ↗</span>
-              </a>
+              ${job.showApplyButton !== false && job.applyUrl ? `
+                <a href="${this.escapeHtml(job.applyUrl)}" target="_blank" rel="noopener noreferrer" class="official-action-link link-apply" id="detail-apply-btn">
+                  <span>APPLY ONLINE NOW ↗</span>
+                </a>
+              ` : ''}
 
               ${settings.enableWhatsappApplyGlobal && job.whatsappApplyEnabled ? `
                 <a href="${this.escapeHtml(waApplyUrl || "")}" target="_blank" rel="noopener noreferrer" class="official-action-link link-whatsapp-apply" id="detail-whatsapp-apply-btn">
@@ -2499,6 +2505,24 @@ class JobKhojApp {
               <input type="url" id="m-apply-url" class="admin-form-input" value="${this.escapeHtml(existing?.applyUrl || 'https://')}">
             </div>
 
+            <div class="admin-form-group">
+              <label class="admin-form-label">Button Visibility (for this post only)</label>
+              <div class="checkbox-group-grid" style="grid-template-columns:repeat(1,minmax(0,1fr));gap:10px;">
+                <label class="checkbox-label-item">
+                  <input type="checkbox" id="m-show-notification" ${existing?.showOfficialNotificationButton !== false ? 'checked' : ''}>
+                  <span>Show Official Notification button</span>
+                </label>
+                <label class="checkbox-label-item">
+                  <input type="checkbox" id="m-show-website" ${existing?.showOfficialWebsiteButton !== false ? 'checked' : ''}>
+                  <span>Show Official Website button</span>
+                </label>
+                <label class="checkbox-label-item">
+                  <input type="checkbox" id="m-show-apply" ${existing?.showApplyButton !== false ? 'checked' : ''}>
+                  <span>Show Apply Now button</span>
+                </label>
+              </div>
+            </div>
+
             <div class="admin-form-section-title">7. URL Slug & Publishing</div>
             <div class="admin-form-group">
               <label class="admin-form-label">URL Slug (Auto-generated or custom)</label>
@@ -2588,6 +2612,9 @@ class JobKhojApp {
         officialNotifUrl: (document.getElementById('m-notif-url') as HTMLInputElement).value.trim(),
         officialWebsiteUrl: (document.getElementById('m-web-url') as HTMLInputElement).value.trim(),
         applyUrl: (document.getElementById('m-apply-url') as HTMLInputElement).value.trim(),
+        showOfficialNotificationButton: (document.getElementById('m-show-notification') as HTMLInputElement).checked,
+        showOfficialWebsiteButton: (document.getElementById('m-show-website') as HTMLInputElement).checked,
+        showApplyButton: (document.getElementById('m-show-apply') as HTMLInputElement).checked,
         whatsappApplyEnabled: (document.getElementById('m-wa-enable') as HTMLInputElement).checked,
         featured: (document.getElementById('m-featured') as HTMLInputElement).checked,
         published: publishedState,
@@ -3058,9 +3085,9 @@ class JobKhojApp {
 
     const download = (name:string, content:string, type:string) => { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),500); };
     const csvEscape=(v:any)=>{const s=String(v??''); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
-    const csvHeaders=['title','organization','category','post','job_type','location','vacancy','qualification','age_limit','application_fee','start_date','last_date','exam_date','selection_process','salary','apply_url','notification_url','official_url','status','featured'];
+    const csvHeaders=['title','organization','category','post','job_type','location','vacancy','qualification','age_limit','application_fee','start_date','last_date','exam_date','selection_process','salary','apply_url','notification_url','official_url','show_notification','show_website','show_apply','status','featured'];
     document.getElementById('csv-template-btn')?.addEventListener('click',()=>download('job-khoj-template.csv',csvHeaders.join(',')+'\n', 'text/csv'));
-    document.getElementById('csv-export-btn')?.addEventListener('click',()=>{ const rows=jobs.map(j=>[j.title,j.org,j.category,j.post||'',j.jobType,j.location,j.vacancies,j.qualification,j.ageLimit,j.appFee,j.appStartDate,j.lastDate,j.examDate,j.selectionProcess,j.salary,j.applyUrl,j.officialNotifUrl,j.officialWebsiteUrl,j.published?'published':'draft',j.featured?'yes':'no']); download('job-khoj-jobs.csv',[csvHeaders.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n'),'text/csv'); });
+    document.getElementById('csv-export-btn')?.addEventListener('click',()=>{ const rows=jobs.map(j=>[j.title,j.org,j.category,j.post||'',j.jobType,j.location,j.vacancies,j.qualification,j.ageLimit,j.appFee,j.appStartDate,j.lastDate,j.examDate,j.selectionProcess,j.salary,j.applyUrl,j.officialNotifUrl,j.officialWebsiteUrl,j.showOfficialNotificationButton !== false?'yes':'no',j.showOfficialWebsiteButton !== false?'yes':'no',j.showApplyButton !== false?'yes':'no',j.published?'published':'draft',j.featured?'yes':'no']); download('job-khoj-jobs.csv',[csvHeaders.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n'),'text/csv'); });
     const parseCSV = (text: string): string[][] => {
       const rows: string[][] = [];
       let row: string[] = [], cell = '', quoted = false;
@@ -3145,7 +3172,7 @@ class JobKhojApp {
               appStartDate:get('start_date'), lastDate:get('last_date'), examDate:get('exam_date')||'To be announced',
               appFee:get('application_fee')||'Refer notification', selectionProcess:get('selection_process')||'Written Exam & Document Verification',
               documentsRequired:[], jobDesc:'', howToApply:'', officialNotifUrl:get('notification_url'), officialWebsiteUrl:get('official_url'),
-              applyUrl:get('apply_url'), whatsappApplyEnabled:true, featured:['yes','true','1'].includes(get('featured').toLowerCase()),
+              applyUrl:get('apply_url'), showOfficialNotificationButton:!['no','false','0'].includes(get('show_notification').toLowerCase()), showOfficialWebsiteButton:!['no','false','0'].includes(get('show_website').toLowerCase()), showApplyButton:!['no','false','0'].includes(get('show_apply').toLowerCase()), whatsappApplyEnabled:true, featured:['yes','true','1'].includes(get('featured').toLowerCase()),
               published, slug:baseSlug, postedDate:new Date().toLocaleDateString('en-IN'), status:jobStatus
             });
           }

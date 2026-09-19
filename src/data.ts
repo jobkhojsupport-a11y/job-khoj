@@ -8,7 +8,7 @@ export interface JobItem {
   vacancies:string; qualification:string; location:string; salary:string; ageLimit:string;
   appStartDate:string; lastDate:string; examDate:string; appFee:string; selectionProcess:string;
   documentsRequired:string[]; jobDesc:string; howToApply?:string; officialNotifUrl:string;
-  officialWebsiteUrl:string; applyUrl:string; whatsappApplyEnabled:boolean; featured:boolean;
+  officialWebsiteUrl:string; applyUrl:string; showOfficialNotificationButton:boolean; showOfficialWebsiteButton:boolean; showApplyButton:boolean; whatsappApplyEnabled:boolean; featured:boolean;
   published:boolean; slug:string; postedDate:string; status:'Active'|'Closing Soon'|'Expired';
 }
 export interface ExamItem { id:string; examName:string; org:string; examDate:string; lastDate:string; details:string; eligibility:string; officialUrl:string; published:boolean; }
