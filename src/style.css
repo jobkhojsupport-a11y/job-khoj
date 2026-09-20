@@ -2734,3 +2734,24 @@ select,
 textarea {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Second-round Lighthouse stability/performance fixes */
+.ad-slot-reserved-top {
+  min-height: 92px;
+  margin: 18px 0;
+  visibility: hidden;
+  contain: layout paint;
+}
+
+@media (max-width: 700px) {
+  .ad-slot-reserved-top {
+    min-height: 72px;
+    margin: 12px 0;
+  }
+}
+
+/* Keep ad frames from changing the surrounding layout when the creative loads. */
+.adsterra-ad-frame {
+  min-height: 50px;
+  contain: layout paint;
+}

@@ -62,31 +62,68 @@ const normalizeDate=(v:string)=>{
 const parseDate=(v:string)=>{const n=normalizeDate(v); return n?new Date(`${n}T23:59:59`).getTime():NaN};
 
 export class JobKhojDataStore {
- private static jobsCache:JobItem[]=[]; private static examsCache:ExamItem[]=[]; private static resultsCache:ResultItem[]=[]; private static admitCardsCache:AdmitCardItem[]=[]; private static blogCache:BlogItem[]=[]; private static adSlotsCache=clone(INITIAL_AD_SLOTS); private static settingsCache=clone(INITIAL_SETTINGS); private static featuresCache=clone(INITIAL_FEATURES); private static analyticsCache=clone(INITIAL_ANALYTICS); private static loaded=false; private static remoteAvailable=false;
+ private static jobsCache:JobItem[]=[]; private static examsCache:ExamItem[]=[]; private static resultsCache:ResultItem[]=[]; private static admitCardsCache:AdmitCardItem[]=[]; private static blogCache:BlogItem[]=[]; private static adSlotsCache=clone(INITIAL_AD_SLOTS); private static settingsCache=clone(INITIAL_SETTINGS); private static featuresCache=clone(INITIAL_FEATURES); private static analyticsCache=clone(INITIAL_ANALYTICS); private static loaded=false; private static remoteAvailable=false; private static secondaryReady=false;
  private static previousIds:Record<Kind,Set<string>>={jobs:new Set(),exams:new Set(),results:new Set(),admit_cards:new Set(),blog:new Set()};
+ private static readonly CACHE_KEY='jobkhoj_public_cache_v3';
+ private static readLocalCache():void{
+   try{
+     const raw=localStorage.getItem(this.CACHE_KEY); if(!raw)return;
+     const cached=JSON.parse(raw); if(!cached || typeof cached!=='object')return;
+     for(const kind of ['jobs','exams','results','admit_cards','blog'] as Kind[]){
+       if(Array.isArray(cached[kind])){ this.setCache(kind,cached[kind]); this.previousIds[kind]=new Set(cached[kind].map((x:any)=>String(x.id))); }
+     }
+     if(cached.settings && typeof cached.settings==='object') this.settingsCache={...INITIAL_SETTINGS,...cached.settings};
+     if(cached.features && typeof cached.features==='object') this.featuresCache={...INITIAL_FEATURES,...cached.features,adminUsers:[]};
+     if(Array.isArray(cached.adSlots)) this.adSlotsCache=cached.adSlots;
+   }catch(e){ console.warn('Local public cache unavailable:',e); }
+ }
+ private static writeLocalCache():void{
+   try{
+     localStorage.setItem(this.CACHE_KEY,JSON.stringify({
+       jobs:this.jobsCache.filter((x:any)=>x.published),
+       exams:this.examsCache.filter((x:any)=>x.published),
+       results:this.resultsCache.filter((x:any)=>x.published),
+       admit_cards:this.admitCardsCache.filter((x:any)=>x.published),
+       blog:this.blogCache.filter((x:any)=>x.published), settings:this.settingsCache,
+       features:this.featuresCache, adSlots:this.adSlotsCache, savedAt:Date.now()
+     }));
+   }catch(e){ /* Storage is optional; remote data remains the source of truth. */ }
+ }
  static async loadAll():Promise<void>{
-   this.remoteAvailable=false;
+   this.remoteAvailable=false; this.secondaryReady=false;
+   // Reuse the last successful public payload immediately. This prevents a
+   // cold network request from replacing an already laid-out page on repeat visits.
+   this.readLocalCache();
+
    const contentTask=(async()=>{
      try{
        const {data,error}=await supabase.from('content_records').select('kind,id,payload,published');
        if(error)throw error;
        for(const kind of ['jobs','exams','results','admit_cards','blog'] as Kind[]){const vals=(data||[]).filter((r:any)=>r.kind===kind).map((r:any)=>({...r.payload,id:String(r.id),published:Boolean(r.published)})); this.setCache(kind,vals); this.previousIds[kind]=new Set(vals.map((x:any)=>String(x.id)));}
        this.remoteAvailable=true;
-     }catch(e){console.error('Content database read failed',e);this.jobsCache=[];this.examsCache=[];this.resultsCache=[];this.admitCardsCache=[];this.blogCache=[];}
+       this.writeLocalCache();
+     }catch(e){console.error('Content database read failed',e);}
    })();
    const configTask=(async()=>{
-     try{const {data,error}=await supabase.from('site_config').select('key,value').in('key',['settings','features']);if(error)throw error;for(const r of data||[]){if(r.key==='settings')this.settingsCache={...INITIAL_SETTINGS,...(r.value||{})};if(r.key==='features')this.featuresCache={...INITIAL_FEATURES,...(r.value||{}),adminUsers:[]};}}
+     try{const {data,error}=await supabase.from('site_config').select('key,value').in('key',['settings','features']);if(error)throw error;for(const r of data||[]){if(r.key==='settings')this.settingsCache={...INITIAL_SETTINGS,...(r.value||{})};if(r.key==='features')this.featuresCache={...INITIAL_FEATURES,...(r.value||{}),adminUsers:[]};} this.writeLocalCache();}
      catch(e){console.error('Site configuration read failed',e);}
    })();
    const adsTask=(async()=>{
-     try{const {data,error}=await supabase.from('ad_slots').select('id,title,location_name,html_content,enabled');if(error)throw error;this.adSlotsCache=(data||[]).map((a:any)=>({id:a.id,title:a.title,locationName:a.location_name,htmlContent:a.html_content||'',enabled:Boolean(a.enabled)}))}
+     try{const {data,error}=await supabase.from('ad_slots').select('id,title,location_name,html_content,enabled');if(error)throw error;this.adSlotsCache=(data||[]).map((a:any)=>({id:a.id,title:a.title,locationName:a.location_name,htmlContent:a.html_content||'',enabled:Boolean(a.enabled)})); this.writeLocalCache();}
      catch(e){console.error('Ad slot read failed',e);}
    })();
-   await Promise.all([contentTask,configTask,adsTask]);
+   // Public rendering only needs content to become useful. Configuration and
+   // ad-slot requests continue in parallel instead of extending the critical path.
+   await contentTask;
    this.loaded=true;
-   // Analytics summary is non-critical; defer it so the public content can settle first.
-   window.setTimeout(() => { void this.loadAnalytics(); }, 1800);
+   void Promise.all([configTask,adsTask]).then(() => {
+     this.secondaryReady=true;
+     window.dispatchEvent(new CustomEvent('jobkhoj:secondary-ready'));
+   });
+   // Analytics is admin-only data and is never part of the public critical path.
  }
+ static hydrateLocalCache():void{ this.readLocalCache(); }
+ static async refreshAnalytics():Promise<void>{ await this.loadAnalytics(); }
  private static async ensureRemote(){if(!this.remoteAvailable)throw new Error('Database is unavailable. No changes were saved.');}
  private static async saveRecord(kind:Kind,item:any):Promise<void>{
    await this.ensureRemote();
@@ -119,7 +156,7 @@ export class JobKhojDataStore {
  private static getCollection(kind:Kind){return kind==='jobs'?this.jobsCache:kind==='exams'?this.examsCache:kind==='results'?this.resultsCache:kind==='admit_cards'?this.admitCardsCache:this.blogCache;}
  private static setCache(kind:Kind,items:any[]){if(kind==='jobs')this.jobsCache=clone(items);if(kind==='exams')this.examsCache=clone(items);if(kind==='results')this.resultsCache=clone(items);if(kind==='admit_cards')this.admitCardsCache=clone(items);if(kind==='blog')this.blogCache=clone(items);}
  static getJobs(){return clone(this.jobsCache)} static getExams(){return clone(this.examsCache)} static getResults(){return clone(this.resultsCache)} static getAdmitCards(){return clone(this.admitCardsCache)} static getBlog(){return clone(this.blogCache)} static getAdSlots(){return clone(this.adSlotsCache)} static getSettings(){return clone(this.settingsCache)} static getFeatures(){return {...clone(this.featuresCache),adminUsers:[]}} static getAnalytics(){return clone(this.analyticsCache)}
- static isRemoteAvailable(){return this.remoteAvailable} static getAdminRole(){return this.adminRole}
+ static isRemoteAvailable(){return this.remoteAvailable} static isSecondaryReady(){return this.secondaryReady} static getAdminRole(){return this.adminRole}
  static canWrite(){return this.adminRole==='owner'||this.adminRole==='editor'} static canManageAdmins(){return this.adminRole==='owner'} private static adminRole:'owner'|'editor'|'viewer'|null=null;
  static setAdminLoggedIn(v:boolean,role?:'owner'|'editor'|'viewer'){this.adminRole=v?(role||'viewer'):null;}
  static isAdminLoggedIn(){return !!this.adminRole}

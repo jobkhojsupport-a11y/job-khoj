@@ -68,20 +68,30 @@ class JobKhojApp {
   }
 
  private async init(): Promise<void> {
+    // Hydrate the last successful public payload synchronously before the first
+    // route render. Repeat visits therefore start with real dimensions/content.
+    JobKhojDataStore.hydrateLocalCache();
     this.applySiteSEO();
 
     // Render the public shell immediately. Remote Supabase data is hydrated
     // afterwards so the first paint does not wait on database/network work.
     void this.handleRouting();
 
-    // Load remote data in parallel with the first paint, then refresh the
-    // current route with the real content.
+    // Refresh once when the content payload arrives. Configuration and ad slots
+    // continue in parallel and dispatch a second event only when actually ready.
     void JobKhojDataStore.loadAll().then(() => {
       this.applySiteSEO();
       void this.handleRouting();
     }).catch((error) => {
       console.error("Remote data load failed:", error);
     });
+
+    window.addEventListener('jobkhoj:secondary-ready', () => {
+      if (this.currentRoute && !this.currentRoute.startsWith('admin')) {
+        this.applySiteSEO();
+        void this.handleRouting();
+      }
+    }, { once: true });
 
     document.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
@@ -90,11 +100,17 @@ class JobKhojApp {
       }
     });
 
-    // Analytics is non-critical for rendering. Defer it until after the
-    // initial page has had time to paint.
-    window.setTimeout(() => {
-      void JobKhojDataStore.incrementStat('totalPageViews');
-    }, 2000);
+    // Page-view analytics is non-critical. Send it only after the page has
+    // settled so the RPC cannot extend the initial network dependency chain.
+    const sendPageView = () => {
+      window.setTimeout(() => { void JobKhojDataStore.incrementStat('totalPageViews'); }, 5000);
+    };
+    const idleCallback = (window as Window & { requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number }).requestIdleCallback;
+    if (idleCallback) {
+      idleCallback(sendPageView, { timeout: 7000 });
+    } else {
+      window.setTimeout(sendPageView, 5000);
+    }
 
     // Register the service worker after the first load so installation and
     // cache work do not compete with the initial render.
@@ -361,6 +377,12 @@ class JobKhojApp {
     const ads = JobKhojDataStore.getAdSlots();
     const ad = ads.find(a => a.id === slotId);
     if (!ad || !ad.enabled || !ad.htmlContent.trim()) {
+      // Keep the header ad's footprint stable while remote ad configuration is
+      // being hydrated. The real creative is mounted later without moving the
+      // header/main content. Other slots remain collapsed when unused.
+      if (slotId === 'slot-1' && !JobKhojDataStore.isSecondaryReady()) {
+        return `<div class="ad-slot-container ad-slot-reserved ad-slot-reserved-top" id="ad-container-slot-1" aria-label="Advertisement" aria-hidden="true"></div>`;
+      }
       return '';
     }
 
@@ -369,7 +391,8 @@ class JobKhojApp {
     if (providerCode) {
       const encoded = this.encodeAdCode(ad.htmlContent);
       const unitClass = unit ? ` adsterra-${unit.format.toLowerCase().replace(/\s+/g, '-')}` : '';
-      return `<div class="ad-slot-container adsterra-slot${unitClass} ${this.escapeHtml(customClass)}" id="ad-container-${this.escapeHtml(slotId)}" data-adsterra-code="${encoded}" data-adsterra-unit="${this.escapeHtml(slotId)}" aria-label="Advertisement"></div>`;
+      const reservedHeight = slotId === 'slot-3' ? 50 : slotId === 'slot-2' ? 90 : slotId === 'slot-4' ? 250 : 92;
+      return `<div class="ad-slot-container adsterra-slot${unitClass} ${this.escapeHtml(customClass)}" id="ad-container-${this.escapeHtml(slotId)}" data-adsterra-code="${encoded}" data-adsterra-unit="${this.escapeHtml(slotId)}" aria-label="Advertisement" style="min-height:${reservedHeight}px"></div>`;
     }
 
     const safeHtml = this.sanitizeAdHtml(ad.htmlContent);
@@ -390,11 +413,15 @@ class JobKhojApp {
   }
 
   private scheduleAdsterraAds(): void {
-    // Load third-party ads after the first content paint so they do not compete
-    // with the critical rendering path.
-    window.setTimeout(() => {
-      void this.activateAdsterraAds();
-    }, 900);
+    // Third-party ad creatives are intentionally delayed until the page is
+    // idle. This keeps Adsterra image/network requests out of the LCP window.
+    const load = () => window.setTimeout(() => { void this.activateAdsterraAds(); }, 3500);
+    const idleCallback = (window as Window & { requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number }).requestIdleCallback;
+    if (idleCallback) {
+      idleCallback(load, { timeout: 4500 });
+    } else {
+      load();
+    }
   }
 
   private async activateAdsterraAds(): Promise<void> {
@@ -2276,7 +2303,11 @@ class JobKhojApp {
 
     switch (tab) {
       case 'overview':
-        this.renderAdminOverview(container);
+        void JobKhojDataStore.refreshAnalytics().finally(() => {
+          if (this.currentRoute === 'admin' || this.currentRoute === 'admin/overview') {
+            this.renderAdminOverview(container);
+          }
+        });
         break;
       case 'jobs':
         this.renderAdminJobs(container);
