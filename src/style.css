@@ -2426,7 +2426,7 @@ body { background: #F7FAFD; }
 .logo-icon-box svg { display:block; }
 .logo-title { font-size: 27px; letter-spacing: -1px; }
 .logo-job { color: #092B57; }
-.logo-khoj { color: #FF3B3B; }
+.logo-khoj { color: var(--orange); }
 .logo-tagline { font-size: 9px; color:#66778C; letter-spacing:.25px; text-transform:none; }
 .nav-desktop { gap: 3px; }
 .nav-link { font-size: 14px; padding: 11px 10px; border-radius: 7px; }
@@ -2493,7 +2493,7 @@ body { background: #F7FAFD; }
 .social-cta-content { flex:1; display:flex; flex-direction:column; gap:3px; }
 .social-cta-content strong { font-size:16px; color:#102B4C; }
 .social-cta-content span { font-size:16px; font-weight:800; color:#0B63CE; }
-.whatsapp-cta-card .social-cta-content span { color:#078F43; }
+.whatsapp-cta-card .social-cta-content span { color:var(--green-hover); }
 .social-cta-btn { display:inline-flex; align-items:center; justify-content:center; padding:10px 18px; border-radius:8px; color:#fff; font-size:13px; font-weight:800; white-space:nowrap; }
 .telegram-btn { background:#0B78E8; }
 .whatsapp-btn-small { background:#08A94F; }
@@ -2647,4 +2647,90 @@ a:focus-visible {
   .adsterra-unit-head { flex-direction:column; }
   .adsterra-unit-footer { flex-direction:column; }
   .adsterra-dashboard-btn { width:100%; justify-content:center; }
+}
+
+
+/* ==========================================================================
+   Lighthouse accessibility + mobile usability fixes
+   ========================================================================== */
+:root {
+  --orange: #C81E1E;
+  --orange-hover: #A11616;
+  --green: #087A3A;
+  --green-hover: #066331;
+}
+
+.nav-link.active,
+.nav-link:hover,
+.view-all-link,
+.btn-reset-filters,
+.footer-contact-info a,
+.footer-link-item a:hover,
+.job-card-title:hover {
+  color: var(--orange);
+}
+
+.whatsapp-btn,
+.btn-apply-now,
+.whatsapp-btn-small,
+.social-cta-icon {
+  background-color: var(--green);
+  color: #fff;
+}
+
+.whatsapp-btn:hover,
+.btn-apply-now:hover,
+.whatsapp-btn-small:hover {
+  background-color: var(--green-hover);
+  color: #fff;
+}
+
+@media (max-width: 768px) {
+  .whatsapp-btn,
+  .hamburger-btn,
+  #mobile-drawer-close,
+  .search-submit-btn,
+  .btn-reset-filters,
+  .btn-view-details,
+  .btn-apply-now,
+  .btn-item-action,
+  .social-cta-btn,
+  .ad-action-btn {
+    min-height: 44px;
+  }
+
+  .hamburger-btn,
+  #mobile-drawer-close {
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .footer-link-item a,
+  .footer-contact-info a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .footer-links-list {
+    gap: 2px;
+  }
+}
+
+.blog-card-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  object-fit: cover;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
 }

@@ -70,33 +70,56 @@ class JobKhojApp {
  private async init(): Promise<void> {
     this.applySiteSEO();
 
-    // Load remote data without blocking the initial render.
+    // Render the public shell immediately. Remote Supabase data is hydrated
+    // afterwards so the first paint does not wait on database/network work.
+    void this.handleRouting();
+
+    // Load remote data in parallel with the first paint, then refresh the
+    // current route with the real content.
     void JobKhojDataStore.loadAll().then(() => {
-      this.handleRouting();
+      this.applySiteSEO();
+      void this.handleRouting();
     }).catch((error) => {
       console.error("Remote data load failed:", error);
     });
-    document.addEventListener('click', (e) => { const target = e.target as HTMLElement; if (target?.closest('.ad-slot-container a')) JobKhojDataStore.incrementStat('applyClicks', 'Advertisement link clicked'); });
-    // Record page view in aggregate analytics
-    JobKhojDataStore.incrementStat('totalPageViews');
 
-    // Register only the first-party service worker; this replaces any legacy third-party worker.
-    if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js?v=4').catch(err => console.warn('Service worker unavailable', err)); }
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target?.closest('.ad-slot-container a')) {
+        void JobKhojDataStore.incrementStat('applyClicks', 'Advertisement link clicked');
+      }
+    });
 
-    window.addEventListener('unhandledrejection', (event) => { console.error(event.reason); this.showToast(event.reason?.message || 'Operation failed. No changes were saved.', false); });
+    // Analytics is non-critical for rendering. Defer it until after the
+    // initial page has had time to paint.
+    window.setTimeout(() => {
+      void JobKhojDataStore.incrementStat('totalPageViews');
+    }, 2000);
 
-    // Setup hash router and browser popstate
-    window.addEventListener('hashchange', () => this.handleRouting());
-    window.addEventListener('popstate', () => this.handleRouting());
+    // Register the service worker after the first load so installation and
+    // cache work do not compete with the initial render.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        window.setTimeout(() => {
+          navigator.serviceWorker.register('/sw.js?v=5')
+            .catch(err => console.warn('Service worker unavailable', err));
+        }, 1500);
+      }, { once: true });
+    }
 
-    // Check for direct /admin path in browser
+    window.addEventListener('unhandledrejection', (event) => {
+      console.error(event.reason);
+      this.showToast(event.reason?.message || 'Operation failed. No changes were saved.', false);
+    });
+
+    window.addEventListener('hashchange', () => void this.handleRouting());
+    window.addEventListener('popstate', () => void this.handleRouting());
+
     if (window.location.pathname === '/admin' || window.location.pathname.endsWith('/admin')) {
       history.replaceState({}, '', '/admin');
     }
 
     this.setupAccessibilityKeyboard();
-    // Initial render
-    this.handleRouting();
   }
 
   private setupAccessibilityKeyboard(): void {
@@ -209,7 +232,7 @@ class JobKhojApp {
     if (redirect && redirect.to && redirect.to.replace(/^#/, '') !== hash) { const target=redirect.to.trim(); if(/^https?:\/\//i.test(target)){ window.location.assign(target); return; } history.replaceState({},'',this.routePath(target)); return void this.handleRouting(); }
     this.currentRoute = hash;
     document.getElementById('jobposting-schema')?.remove();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'auto' });
     this.updateRouteSEO(hash);
 
     // Check if route is admin
@@ -257,7 +280,7 @@ class JobKhojApp {
       this.renderNotFoundView();
     }
     this.rewriteInternalLinks();
-    void this.activateAdsterraAds();
+    this.scheduleAdsterraAds();
   }
 
   private updateRouteSEO(route: string): void {
@@ -364,6 +387,14 @@ class JobKhojApp {
     const binary = atob(encoded);
     const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
     return new TextDecoder().decode(bytes);
+  }
+
+  private scheduleAdsterraAds(): void {
+    // Load third-party ads after the first content paint so they do not compete
+    // with the critical rendering path.
+    window.setTimeout(() => {
+      void this.activateAdsterraAds();
+    }, 900);
   }
 
   private async activateAdsterraAds(): Promise<void> {
@@ -1034,10 +1065,10 @@ class JobKhojApp {
             <span>Last Date: <strong style="color: #D34300;">${this.escapeHtml(job.lastDate || '')}</strong></span>
           </div>
           <div class="job-btn-group">
-            <button class="btn-view-details" data-job-id="${this.escapeHtml(job.id)}">
+            <button class="btn-view-details" data-job-id="${this.escapeHtml(job.id)}" aria-label="View details for ${this.escapeHtml(job.title || "this job")}">
               VIEW DETAILS
             </button>
-            <button class="btn-apply-now" data-apply-url="${this.escapeHtml(job.applyUrl || "")}" data-job-id="${this.escapeHtml(job.id)}">
+            <button class="btn-apply-now" data-apply-url="${this.escapeHtml(job.applyUrl || "")}" data-job-id="${this.escapeHtml(job.id)}" aria-label="Apply now for ${this.escapeHtml(job.title || "this job")}">
               APPLY NOW ${Icons.external}
             </button>
           </div>
@@ -1751,7 +1782,7 @@ class JobKhojApp {
         <div class="blog-grid">
           ${articles.length > 0 ? articles.map(art => `
             <article class="blog-card">
-              <img src="${this.escapeHtml(art.featuredImage || "")}" alt="${this.escapeHtml(art.title || '')}" class="blog-card-img" loading="lazy">
+              <img src="${this.escapeHtml(art.featuredImage || "")}" alt="${this.escapeHtml(art.title || '')}" class="blog-card-img" loading="lazy" decoding="async" width="1200" height="675">
               <div class="blog-card-body">
                 <span class="blog-category-tag">${this.escapeHtml(art.category || '')}</span>
                 <h3 class="blog-card-title" data-art-slug="${this.escapeHtml(art.slug || art.id)}">${this.escapeHtml(art.title || '')}</h3>
@@ -1823,7 +1854,7 @@ class JobKhojApp {
             <span>Published: <strong>${this.escapeHtml(article.publishedDate || '')}</strong></span>
           </div>
 
-          <img src="${this.escapeHtml(article.featuredImage || "")}" alt="${this.escapeHtml(article.title || '')}" style="width:100%; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;">
+          <img src="${this.escapeHtml(article.featuredImage || "")}" alt="${this.escapeHtml(article.title || '')}" style="width:100%; aspect-ratio:16/9; border-radius:var(--radius-md); max-height:420px; object-fit:cover; margin-bottom:28px;" loading="eager" decoding="async" width="1200" height="675">
 
           <div class="detail-text-content" style="font-size:16px; line-height:1.8;">
             ${this.sanitizeAdHtml(article.content || '')}

@@ -84,7 +84,8 @@ export class JobKhojDataStore {
    })();
    await Promise.all([contentTask,configTask,adsTask]);
    this.loaded=true;
-   void this.loadAnalytics();
+   // Analytics summary is non-critical; defer it so the public content can settle first.
+   window.setTimeout(() => { void this.loadAnalytics(); }, 1800);
  }
  private static async ensureRemote(){if(!this.remoteAvailable)throw new Error('Database is unavailable. No changes were saved.');}
  private static async saveRecord(kind:Kind,item:any):Promise<void>{
