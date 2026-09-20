@@ -2574,3 +2574,77 @@ a:focus-visible {
   outline: 3px solid currentColor;
   outline-offset: 2px;
 }
+
+
+/* ==========================================================================
+   ADSTERRA PUBLISHER ADMIN + RUNTIME
+   ========================================================================== */
+.adsterra-admin-page { width:100%; }
+.adsterra-dashboard-btn { text-decoration:none; }
+.adsterra-info-banner {
+  display:flex; align-items:flex-start; gap:12px; padding:15px 17px; margin-bottom:18px;
+  background:#F0FFF5; border:1px solid #BCE8C9; border-radius:10px; color:#14532D;
+}
+.adsterra-info-icon {
+  width:32px; height:32px; flex:0 0 32px; display:flex; align-items:center; justify-content:center;
+  border-radius:8px; background:#00A63C; color:#fff; font-weight:900;
+}
+.adsterra-info-banner strong { display:block; font-size:14px; margin-bottom:3px; }
+.adsterra-info-banner p { margin:0; font-size:12px; line-height:1.5; }
+.adsterra-status-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
+.adsterra-status-card {
+  background:#fff; border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+}
+.adsterra-status-card strong { font-size:22px; color:var(--navy); }
+.adsterra-status-card span { font-size:11px; color:var(--text-muted); font-weight:700; }
+.adsterra-units-form { display:flex; flex-direction:column; gap:14px; }
+.adsterra-unit-card {
+  background:#fff; border:1px solid var(--border); border-radius:12px; overflow:hidden;
+}
+.adsterra-unit-head {
+  display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
+  padding:15px 17px; border-bottom:1px solid #EEF2F6;
+}
+.adsterra-unit-name { font-size:16px; font-weight:900; color:var(--navy); margin-bottom:6px; }
+.adsterra-unit-meta { display:flex; flex-wrap:wrap; gap:6px; }
+.adsterra-unit-meta span {
+  display:inline-flex; padding:4px 8px; border-radius:999px; background:#F4F7FA;
+  color:#64748B; font-size:10.5px; font-weight:700;
+}
+.adsterra-switch { display:flex; align-items:center; gap:8px; cursor:pointer; white-space:nowrap; }
+.adsterra-switch input { position:absolute; opacity:0; pointer-events:none; }
+.adsterra-switch span {
+  width:38px; height:21px; border-radius:999px; background:#CBD5E1; position:relative; transition:.15s;
+}
+.adsterra-switch span:after {
+  content:""; width:17px; height:17px; border-radius:50%; background:#fff; position:absolute; top:2px; left:2px;
+  box-shadow:0 1px 3px rgba(0,0,0,.18); transition:.15s;
+}
+.adsterra-switch input:checked + span { background:#00A63C; }
+.adsterra-switch input:checked + span:after { transform:translateX(17px); }
+.adsterra-switch b { font-size:11px; color:#64748B; }
+.adsterra-code-row { padding:14px 17px 10px; }
+.adsterra-code-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+.adsterra-code-label label { font-size:10px; font-weight:900; color:#475569; letter-spacing:.5px; }
+.adsterra-code-state-ready { font-size:10px; color:#008A32; font-weight:800; }
+.adsterra-code-state-empty { font-size:10px; color:#94A3B8; font-weight:700; }
+.adsterra-code-textarea {
+  width:100%; min-height:105px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px; line-height:1.45; background:#F8FAFC;
+}
+.adsterra-unit-footer {
+  display:flex; justify-content:space-between; gap:12px; padding:10px 17px 13px;
+  color:#64748B; font-size:10.5px; border-top:1px solid #F1F5F9;
+}
+.adsterra-save-row { display:flex; justify-content:flex-end; padding:4px 0 20px; }
+.adsterra-slot { min-height:0; }
+.adsterra-ad-frame { max-width:100%; }
+.adsterra-loaded-badge { display:none !important; }
+
+@media (max-width: 700px) {
+  .adsterra-status-grid { grid-template-columns:1fr; }
+  .adsterra-unit-head { flex-direction:column; }
+  .adsterra-unit-footer { flex-direction:column; }
+  .adsterra-dashboard-btn { width:100%; justify-content:center; }
+}

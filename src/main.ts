@@ -14,6 +14,50 @@ import {
   SiteSettings
 } from './data.ts';
 
+const ADSTERRA_UNITS: Record<string, {
+  name: string;
+  format: string;
+  size: string;
+  placement: string;
+  note: string;
+}> = {
+  'slot-1': {
+    name: 'NativeBanner_1',
+    format: 'Native Banner',
+    size: 'Responsive',
+    placement: 'Header / top of public pages',
+    note: 'Adsterra Native Banner. Paste the complete Adsterra code from Get Code.'
+  },
+  'slot-2': {
+    name: '728x90_1',
+    format: 'Banner',
+    size: '728×90',
+    placement: 'Homepage under hero section',
+    note: 'Desktop leaderboard. Use the 728×90 Adsterra code.'
+  },
+  'slot-3': {
+    name: '320x50_1',
+    format: 'Banner',
+    size: '320×50',
+    placement: 'Jobs directory top',
+    note: 'Mobile leaderboard. Use the 320×50 Adsterra code.'
+  },
+  'slot-4': {
+    name: '300x250_1',
+    format: 'Banner',
+    size: '300×250',
+    placement: 'Job detail top',
+    note: 'Medium rectangle. Use the 300×250 Adsterra code.'
+  },
+  'slot-6': {
+    name: 'SocialBar_1',
+    format: 'Social Bar',
+    size: 'Global',
+    placement: 'Site-wide',
+    note: 'Adsterra Social Bar. Use one Social Bar code site-wide.'
+  }
+};
+
 class JobKhojApp {
   private currentRoute: string = '';
   private searchDebounceTimer: number | null = null;
@@ -213,6 +257,7 @@ class JobKhojApp {
       this.renderNotFoundView();
     }
     this.rewriteInternalLinks();
+    void this.activateAdsterraAds();
   }
 
   private updateRouteSEO(route: string): void {
@@ -287,7 +332,8 @@ class JobKhojApp {
     }, 3200);
   }
 
-  // Advertisement HTML Renderer
+  // Adsterra renderer. Admin-provided Adsterra scripts are mounted after the
+  // public view is rendered so React/vanilla innerHTML does not silently disable them.
   private renderAdSlot(slotId: string, customClass = ''): string {
     const ads = JobKhojDataStore.getAdSlots();
     const ad = ads.find(a => a.id === slotId);
@@ -295,10 +341,101 @@ class JobKhojApp {
       return '';
     }
 
+    const unit = ADSTERRA_UNITS[slotId];
+    const providerCode = /<script\b/i.test(ad.htmlContent) || /atOptions|adsterra/i.test(ad.htmlContent);
+    if (providerCode) {
+      const encoded = this.encodeAdCode(ad.htmlContent);
+      const unitClass = unit ? ` adsterra-${unit.format.toLowerCase().replace(/\s+/g, '-')}` : '';
+      return `<div class="ad-slot-container adsterra-slot${unitClass} ${this.escapeHtml(customClass)}" id="ad-container-${this.escapeHtml(slotId)}" data-adsterra-code="${encoded}" data-adsterra-unit="${this.escapeHtml(slotId)}" aria-label="Advertisement"></div>`;
+    }
+
     const safeHtml = this.sanitizeAdHtml(ad.htmlContent);
     return `<div class="ad-slot-container ${this.escapeHtml(customClass)}" id="ad-container-${this.escapeHtml(slotId)}">${safeHtml}</div>`;
   }
 
+  private encodeAdCode(code: string): string {
+    const bytes = new TextEncoder().encode(code);
+    let binary = '';
+    bytes.forEach(b => { binary += String.fromCharCode(b); });
+    return btoa(binary);
+  }
+
+  private decodeAdCode(encoded: string): string {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+
+  private async activateAdsterraAds(): Promise<void> {
+    const containers = Array.from(document.querySelectorAll<HTMLElement>('.adsterra-slot[data-adsterra-code]'));
+    for (const container of containers) {
+      if (container.dataset.adsterraLoaded === '1') continue;
+
+      const slotId = container.dataset.adsterraUnit || '';
+      const code = container.dataset.adsterraCode || '';
+      if (!code) continue;
+
+      try {
+        const html = this.decodeAdCode(code);
+
+        // Social Bar is designed to run in the top-level page. Adsterra recommends
+        // placing its code before </body>; load it once globally across route changes.
+        if (slotId === 'slot-6') {
+          if (document.body.dataset.adsterraSocialbarLoaded === '1') {
+            container.dataset.adsterraLoaded = '1';
+            container.innerHTML = '<span class="adsterra-loaded-badge">Adsterra Social Bar active</span>';
+            continue;
+          }
+
+          const host = document.createElement('div');
+          host.id = 'jobkhoj-adsterra-socialbar';
+          host.style.display = 'contents';
+          const temp = document.createElement('template');
+          temp.innerHTML = html;
+          const nodes = Array.from(temp.content.childNodes);
+          nodes.forEach(node => host.appendChild(node));
+          document.body.appendChild(host);
+
+          // Re-create script elements because scripts inserted with innerHTML do not execute.
+          host.querySelectorAll('script').forEach(oldScript => {
+            const script = document.createElement('script');
+            Array.from(oldScript.attributes).forEach(attr => script.setAttribute(attr.name, attr.value));
+            script.textContent = oldScript.textContent || '';
+            oldScript.replaceWith(script);
+          });
+
+          document.body.dataset.adsterraSocialbarLoaded = '1';
+          container.dataset.adsterraLoaded = '1';
+          container.innerHTML = '<span class="adsterra-loaded-badge">Adsterra Social Bar active</span>';
+          continue;
+        }
+
+        // Banner/Native codes run in an isolated, responsive frame. This prevents
+        // Adsterra's inline scripts from interfering with JobKhoj routing or DOM.
+        const unit = ADSTERRA_UNITS[slotId];
+        const frame = document.createElement('iframe');
+        frame.className = 'adsterra-ad-frame';
+        frame.title = `${unit?.format || 'Adsterra'} advertisement`;
+        frame.setAttribute('scrolling', 'no');
+        frame.setAttribute('frameborder', '0');
+        frame.setAttribute('loading', 'lazy');
+        frame.style.width = '100%';
+        frame.style.border = '0';
+        frame.style.display = 'block';
+        frame.style.margin = '0 auto';
+
+        const height = slotId === 'slot-3' ? 50 : slotId === 'slot-2' ? 90 : slotId === 'slot-4' ? 250 : 300;
+        frame.style.height = `${height}px`;
+
+        const doc = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:0;background:transparent;width:100%;min-height:100%;overflow:hidden}body{display:flex;justify-content:center;align-items:flex-start}</style></head><body>${html}</body></html>`;
+        frame.srcdoc = doc;
+        container.replaceChildren(frame);
+        container.dataset.adsterraLoaded = '1';
+      } catch (error) {
+        console.error(`Adsterra unit ${slotId} failed to load`, error);
+      }
+    }
+  }
 
   private sanitizeAdHtml(html: string): string {
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -309,7 +446,7 @@ class JobKhojApp {
         [...child.attributes].forEach(attr => {
           const n=attr.name.toLowerCase(), v=attr.value.trim();
           if (n.startsWith('on') || n==='style' || (n==='href' || n==='src') && !/^(https?:|mailto:|tel:|\/|#)/i.test(v)) child.removeAttribute(attr.name);
-          else if (n==='href' || n==='src') { try { const u=new URL(v,location.origin); const allowedProtocols=(n==='src'?['https:']:['http:','https:']); if(!allowedProtocols.includes(u.protocol)) child.removeAttribute(attr.name); else child.setAttribute(attr.name,u.href); } catch { child.removeAttribute(attr.name); } }
+          else if (n==='href' || n==='src') { try { const u=new URL(v,location.origin); const allowedProtocols=(n==='src'?['https:']:['http:','https:']); if(!allowedProtocols.includes(u.protocol)) child.removeAttribute(attr.name); else child.setAttribute(n,u.href); } catch { child.removeAttribute(attr.name); } }
           else if (!['class','id','title','alt','target','rel','width','height'].includes(n)) child.removeAttribute(attr.name);
         });
         if (child.tagName === 'A' && child.getAttribute('target') === '_blank') {
@@ -2834,68 +2971,117 @@ class JobKhojApp {
     document.getElementById('content-modal-draft')?.addEventListener('click',()=>save(false));document.getElementById('content-modal-form')?.addEventListener('submit',e=>{e.preventDefault();save(true);});
   }
 
-  // 7. Advertisements (7 Slots) Admin Sub-view
+  // 7. Adsterra Publisher integration
   private renderAdminAds(container: HTMLElement): void {
     const ads = JobKhojDataStore.getAdSlots();
 
+    const cards = Object.entries(ADSTERRA_UNITS).map(([slotId, unit]) => {
+      const ad = ads.find(a => a.id === slotId) || {
+        id: slotId,
+        title: unit.name,
+        locationName: unit.placement,
+        htmlContent: '',
+        enabled: false
+      };
+      const hasCode = Boolean(ad.htmlContent.trim());
+      return `
+        <section class="adsterra-unit-card" data-slot="${this.escapeHtml(slotId)}">
+          <div class="adsterra-unit-head">
+            <div>
+              <div class="adsterra-unit-name">${this.escapeHtml(unit.name)}</div>
+              <div class="adsterra-unit-meta">
+                <span>${this.escapeHtml(unit.format)}</span>
+                <span>${this.escapeHtml(unit.size)}</span>
+                <span>${this.escapeHtml(unit.placement)}</span>
+              </div>
+            </div>
+            <label class="adsterra-switch">
+              <input type="checkbox" id="ad-enable-${this.escapeHtml(slotId)}" ${ad.enabled ? 'checked' : ''}>
+              <span></span>
+              <b>${ad.enabled ? 'Active' : 'Inactive'}</b>
+            </label>
+          </div>
+
+          <div class="adsterra-code-row">
+            <div class="adsterra-code-label">
+              <label for="ad-code-${this.escapeHtml(slotId)}">AD CODE</label>
+              <span class="${hasCode ? 'adsterra-code-state-ready' : 'adsterra-code-state-empty'}">${hasCode ? 'Code saved' : 'No code yet'}</span>
+            </div>
+            <textarea id="ad-code-${this.escapeHtml(slotId)}" class="admin-form-textarea adsterra-code-textarea" rows="5" spellcheck="false" placeholder="Paste the complete Adsterra code from GET CODE here...">${this.escapeHtml(ad.htmlContent)}</textarea>
+          </div>
+
+          <div class="adsterra-unit-footer">
+            <span>${this.escapeHtml(unit.note)}</span>
+            <span>JobKhoj placement: ${this.escapeHtml(unit.placement)}</span>
+          </div>
+        </section>
+      `;
+    }).join('');
+
     container.innerHTML = `
-      <div>
+      <div class="adsterra-admin-page">
         <div class="admin-view-header">
           <div>
-            <h1 class="admin-heading">Advertisement System (Configurable Placement Slots)</h1>
-            <p class="admin-subheading">Configure sponsor notices and banner codes across high-traffic page locations</p>
+            <h1 class="admin-heading">Adsterra Advertisement System</h1>
+            <p class="admin-subheading">Manage your Adsterra publisher units and placements from one panel.</p>
+          </div>
+          <a class="btn-admin-action-primary adsterra-dashboard-btn" href="https://publishers.adsterra.com/" target="_blank" rel="noopener noreferrer">OPEN ADSTERRA</a>
+        </div>
+
+        <div class="adsterra-info-banner">
+          <div class="adsterra-info-icon">A</div>
+          <div>
+            <strong>Adsterra setup</strong>
+            <p>Generate the units in your Adsterra Publisher dashboard, then paste each complete code into the matching unit below. JobKhoj activates Adsterra scripts after the public page renders.</p>
           </div>
         </div>
 
-        <form id="admin-ads-form" style="display:flex;flex-direction:column;gap:20px;">
-          ${ads.map(ad => `
-            <div class="stat-metric-card" id="ad-slot-editor-${this.escapeHtml(ad.id)}">
-              <div class="flex items-center justify-between" style="margin-bottom:12px;">
-                <div>
-                  <h3 style="font-size:16px;font-weight:900;color:var(--orange);">${this.escapeHtml(ad.title)}</h3>
-                  <span style="font-size:12px;color:#94A3B8;">Location: ${this.escapeHtml(ad.locationName)}</span>
-                </div>
-                <label class="checkbox-label-item">
-                  <input type="checkbox" id="ad-enable-${this.escapeHtml(ad.id)}" ${ad.enabled ? 'checked' : ''}>
-                  <span style="font-weight:800;color:#FFF;">ENABLED</span>
-                </label>
-              </div>
+        <div class="adsterra-status-grid">
+          <div class="adsterra-status-card"><strong>${Object.keys(ADSTERRA_UNITS).length}</strong><span>Configured units</span></div>
+          <div class="adsterra-status-card"><strong>${ads.filter(a => a.enabled).length}</strong><span>Enabled units</span></div>
+          <div class="adsterra-status-card"><strong>${ads.filter(a => a.htmlContent.trim()).length}</strong><span>Codes saved</span></div>
+        </div>
 
-              <div class="admin-form-group" style="margin-bottom:8px;">
-                <label class="admin-form-label">Banner HTML / Embed Markup</label>
-                <textarea id="ad-code-${this.escapeHtml(ad.id)}" class="admin-form-textarea" rows="4" style="font-family:monospace;font-size:12px;">${this.escapeHtml(ad.htmlContent)}</textarea>
-              </div>
-              <span style="font-size:11.5px;color:#64748B;">* If disabled, this advertisement slot will completely disappear from the public layout without leaving blank space.</span>
-            </div>
-          `).join('')}
-
-          <div style="margin-top:10px;">
-            <button type="submit" class="btn-admin-action-primary" style="padding:12px 28px;font-size:15px;">
-              SAVE ADVERTISEMENT SLOTS
-            </button>
+        <form id="admin-ads-form" class="adsterra-units-form">
+          ${cards}
+          <div class="adsterra-save-row">
+            <button type="submit" class="btn-admin-action-primary">SAVE ADSTERRA SETTINGS</button>
           </div>
         </form>
       </div>
     `;
 
+    document.querySelectorAll<HTMLInputElement>('.adsterra-switch input').forEach(input => {
+      input.addEventListener('change', () => {
+        const label = input.closest('.adsterra-switch')?.querySelector('b');
+        if (label) label.textContent = input.checked ? 'Active' : 'Inactive';
+      });
+    });
+
     document.getElementById('admin-ads-form')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const updatedAds = ads.map(ad => {
-        const checkbox = document.getElementById(`ad-enable-${ad.id}`) as HTMLInputElement | null;
-        const textarea = document.getElementById(`ad-code-${ad.id}`) as HTMLTextAreaElement | null;
+
+      const updatedAds: AdSlot[] = Object.entries(ADSTERRA_UNITS).map(([slotId, unit]) => {
+        const checkbox = document.getElementById(`ad-enable-${slotId}`) as HTMLInputElement | null;
+        const textarea = document.getElementById(`ad-code-${slotId}`) as HTMLTextAreaElement | null;
+        const existing = ads.find(a => a.id === slotId);
         return {
-          ...ad,
-          enabled: checkbox?.checked ?? ad.enabled,
-          htmlContent: textarea?.value ?? ad.htmlContent
+          id: slotId,
+          title: unit.name,
+          locationName: unit.placement,
+          htmlContent: textarea?.value ?? existing?.htmlContent ?? '',
+          enabled: checkbox?.checked ?? existing?.enabled ?? false
         };
       });
 
       try {
         await JobKhojDataStore.saveAdSlots(updatedAds);
-        this.showToast('Advertisement slots updated successfully');
+        this.showToast('Adsterra settings saved successfully');
+        const main = document.getElementById('admin-main-view');
+        if (main) this.renderAdminAds(main);
       } catch (error) {
-        console.error('Advertisement save failed:', error);
-        this.showToast('Could not save advertisements. Check your Supabase API key and RLS policy.', false);
+        console.error('Adsterra save failed:', error);
+        this.showToast('Could not save Adsterra settings. Check your Supabase API key and RLS policy.', false);
       }
     });
   }
