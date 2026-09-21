@@ -967,6 +967,11 @@ class JobKhojApp {
         </div>
       </section>
 
+      <!-- Direct Sponsor Banner (disappears cleanly if disabled) -->
+      <div class="container">
+        ${this.renderSponsorTop()}
+      </div>
+
       <!-- Homepage Ad Slot 2 (disappears cleanly if disabled) -->
       <div class="container">
         ${this.renderAdSlot('slot-2')}
