@@ -745,14 +745,7 @@ class JobKhojApp {
           <!-- Desktop Navigation -->
           <nav class="nav-desktop" id="nav-desktop">
             <a href="/" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
-            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
-            <a href="/category/govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
-            <a href="/category/private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
-            <a href="/category/bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank</a>
-            <a href="/category/railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway</a>
-            <a href="/category/defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence</a>
-            <a href="/category/teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching</a>
-            <a href="/category/police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police</a>
+            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' || activeRoute.startsWith('category-') ? 'active' : ''}">Jobs</a>
             <a href="/exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Exams</a>
             <a href="/results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
             <a href="/admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
@@ -794,14 +787,7 @@ class JobKhojApp {
           </div>
           <nav class="mobile-drawer-nav">
             <a href="/" class="nav-link ${activeRoute === 'home' ? 'active' : ''}">Home</a>
-            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' ? 'active' : ''}">Latest Jobs</a>
-            <a href="/category/govt" class="nav-link ${activeRoute === 'category-govt' ? 'active' : ''}">Government Jobs</a>
-            <a href="/category/private" class="nav-link ${activeRoute === 'category-private' ? 'active' : ''}">Private Jobs</a>
-            <a href="/category/bank" class="nav-link ${activeRoute === 'category-bank' ? 'active' : ''}">Bank Jobs</a>
-            <a href="/category/railway" class="nav-link ${activeRoute === 'category-railway' ? 'active' : ''}">Railway Jobs</a>
-            <a href="/category/defence" class="nav-link ${activeRoute === 'category-defence' ? 'active' : ''}">Defence Jobs</a>
-            <a href="/category/teaching" class="nav-link ${activeRoute === 'category-teaching' ? 'active' : ''}">Teaching Jobs</a>
-            <a href="/category/police" class="nav-link ${activeRoute === 'category-police' ? 'active' : ''}">Police Jobs</a>
+            <a href="/jobs" class="nav-link ${activeRoute === 'jobs' || activeRoute.startsWith('category-') ? 'active' : ''}">Jobs</a>
             <a href="/exams" class="nav-link ${activeRoute === 'exams' ? 'active' : ''}">Competitive Exams</a>
             <a href="/results" class="nav-link ${activeRoute === 'results' ? 'active' : ''}">Results</a>
             <a href="/admit-cards" class="nav-link ${activeRoute === 'admit-cards' ? 'active' : ''}">Admit Card</a>
@@ -917,7 +903,7 @@ class JobKhojApp {
     });
 
     // Close drawer when link clicked
-    document.querySelectorAll('.mobile-drawer-nav .nav-link').forEach(link => {
+    document.querySelectorAll('.mobile-drawer-nav a.nav-link').forEach(link => {
       link.addEventListener('click', () => overlay?.classList.remove('open'));
     });
   }
@@ -1105,10 +1091,10 @@ class JobKhojApp {
             <div class="item-row-list">
               ${results.length > 0 ? results.slice(0, 3).map(res => `
                 <div class="item-row">
-                  <div class="item-row-title">${res.resultTitle}</div>
-                  <div class="item-row-org">${res.org} • Declared: ${res.resultDate}</div>
+                  <div class="item-row-title">${this.escapeHtml(res.resultTitle || '')}</div>
+                  <div class="item-row-org">${this.escapeHtml(res.org || '')} • Declared: ${this.escapeHtml(res.resultDate || '')}</div>
                   <div class="item-row-footer">
-                    <span>${res.exam}</span>
+                    <span>${this.escapeHtml(res.exam || '')}</span>
                     <a href="${this.escapeHtml(res.resultUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
                       VIEW RESULT ↗
                     </a>
@@ -1135,10 +1121,10 @@ class JobKhojApp {
             <div class="item-row-list">
               ${admitCards.length > 0 ? admitCards.slice(0, 3).map(ac => `
                 <div class="item-row">
-                  <div class="item-row-title">${ac.examName}</div>
-                  <div class="item-row-org">${ac.org} • Released: ${ac.releaseDate}</div>
+                  <div class="item-row-title">${this.escapeHtml(ac.examName || '')}</div>
+                  <div class="item-row-org">${this.escapeHtml(ac.org || '')} • Released: ${this.escapeHtml(ac.releaseDate || '')}</div>
                   <div class="item-row-footer">
-                    <span>Exam: ${ac.examDate}</span>
+                    <span>Exam: ${this.escapeHtml(ac.examDate || '')}</span>
                     <a href="${this.escapeHtml(ac.downloadUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-item-action">
                       DOWNLOAD ADMIT CARD ↗
                     </a>
@@ -1155,24 +1141,24 @@ class JobKhojApp {
         </div>
 
         <!-- WHATSAPP + TELEGRAM CTA SECTION -->
-        <div class="social-cta-grid">
-          <div class="social-cta-card telegram-cta-card">
+        ${settings.telegramChannelUrl || settings.whatsappChannelUrl ? `<div class="social-cta-grid">
+          ${settings.telegramChannelUrl ? `<div class="social-cta-card telegram-cta-card">
             <div class="social-cta-icon telegram-icon" aria-hidden="true"><svg viewBox="0 0 48 48" width="42" height="42"><circle cx="24" cy="24" r="22" fill="#16A8E8"/><path d="M35.8 12.8 10.7 22.5c-1.7.7-1.7 1.7-.3 2.1l6.4 2 2.4 7.5c.3.9.2 1.3 1.1 1.3.6 0 .9-.3 1.3-.7l3.1-3 6.5 4.8c1.2.7 2.1.3 2.4-1.1l4.2-20c.4-1.7-.7-2.4-2-1.8Z" fill="#fff"/></svg></div>
             <div class="social-cta-content">
               <strong>Don’t Miss Any Update!</strong>
               <span>Join Our Telegram Channel</span>
             </div>
             <a href="${this.escapeHtml(settings.telegramChannelUrl)}" target="_blank" rel="noopener noreferrer" class="social-cta-btn telegram-btn">Join Now</a>
-          </div>
-          <div class="social-cta-card whatsapp-cta-card">
+          </div>` : ''}
+          ${settings.whatsappChannelUrl ? `<div class="social-cta-card whatsapp-cta-card">
             <div class="social-cta-icon">${Icons.whatsapp}</div>
             <div class="social-cta-content">
               <strong>Get Daily Job Alerts</strong>
               <span>On WhatsApp</span>
             </div>
             <a href="${this.escapeHtml(settings.whatsappChannelUrl)}" target="_blank" rel="noopener noreferrer" class="social-cta-btn whatsapp-btn-small" id="home-whatsapp-channel-btn">Join Now</a>
-          </div>
-        </div>
+          </div>` : ''}
+        </div>` : ''}
 
       </div>
     `;
@@ -1859,18 +1845,18 @@ class JobKhojApp {
               <div class="job-card-header">
                 <div>
                   <span class="job-category-badge" style="background:#E8FAF1;color:#20C76A;">DECLARATION</span>
-                  <h3 class="job-card-title">${res.resultTitle}</h3>
-                  <div class="job-card-org">${res.org} • Exam: ${res.exam}</div>
+                  <h3 class="job-card-title">${this.escapeHtml(res.resultTitle || '')}</h3>
+                  <div class="job-card-org">${this.escapeHtml(res.org || '')} • Exam: ${this.escapeHtml(res.exam || '')}</div>
                 </div>
                 <span class="job-status-badge status-active">DECLARED</span>
               </div>
 
               <div style="font-size:14px;color:#334155;line-height:1.6;margin:16px 0;">
-                ${res.description}
+                ${this.escapeHtml(res.description || '')}
               </div>
 
               <div class="job-card-footer">
-                <span>Result Declaration Date: <strong>${res.resultDate}</strong></span>
+                <span>Result Declaration Date: <strong>${this.escapeHtml(res.resultDate || '')}</strong></span>
                 <div class="flex gap-2">
                   <a href="${this.escapeHtml(res.officialWebsite || "")}" target="_blank" rel="noopener noreferrer" class="btn-view-details">
                     Official Website
@@ -3398,7 +3384,7 @@ class JobKhojApp {
             </div>
             <div class="admin-form-group">
               <label class="admin-form-label">Official Telegram Channel Link</label>
-              <input type="url" id="st-telegram" class="admin-form-input" value="${settings.telegramChannelUrl || 'https://t.me/'}" placeholder="https://t.me/yourchannel">
+              <input type="url" id="st-telegram" class="admin-form-input" value="${this.escapeHtml(settings.telegramChannelUrl || 'https://t.me/')}" placeholder="https://t.me/yourchannel">
             </div>
 
             <div class="admin-form-group">

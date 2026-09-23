@@ -186,7 +186,7 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   gap: 4px;
-  overflow-x: auto;
+  overflow: visible;
   scrollbar-width: none;
 }
 

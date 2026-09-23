@@ -18,7 +18,13 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
     { loc: `${base}/exams` },
     { loc: `${base}/results` },
     { loc: `${base}/admit-cards` },
-    { loc: `${base}/blog` }
+    { loc: `${base}/blog` },
+    { loc: `${base}/about` },
+    { loc: `${base}/contact` },
+    { loc: `${base}/privacy-policy` },
+    { loc: `${base}/terms` },
+    { loc: `${base}/disclaimer` },
+    { loc: `${base}/editorial-policy` }
   ];
 
   const supabaseUrl = env.SUPABASE_URL?.trim();

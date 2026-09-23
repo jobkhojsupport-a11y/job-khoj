@@ -136,13 +136,19 @@ revoke all on function public.record_analytics_event(text,text,text) from public
 
 create or replace function public.analytics_summary()
 returns table(event_type text,event_count bigint)
-language sql stable security definer set search_path=public as $$
- select event_type,count(*) from public.analytics_events group by event_type;
+language plpgsql stable security definer set search_path=public as $$
+begin
+ if not public.is_admin() then raise exception 'Admin permission required'; end if;
+ return query select a.event_type,count(*) from public.analytics_events a group by a.event_type;
+end;
 $$;
 create or replace function public.analytics_searches()
 returns table(term text,event_count bigint)
-language sql stable security definer set search_path=public as $$
- select label,count(*) from public.analytics_events where event_type='search' and label is not null group by label order by count(*) desc limit 15;
+language plpgsql stable security definer set search_path=public as $$
+begin
+ if not public.is_admin() then raise exception 'Admin permission required'; end if;
+ return query select a.label,count(*) from public.analytics_events a where a.event_type='search' and a.label is not null group by a.label order by count(*) desc limit 15;
+end;
 $$;
 revoke all on function public.analytics_summary() from public; grant execute on function public.analytics_summary() to authenticated;
 revoke all on function public.analytics_searches() from public; grant execute on function public.analytics_searches() to authenticated;
