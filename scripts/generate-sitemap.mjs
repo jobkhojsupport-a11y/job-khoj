@@ -24,12 +24,27 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const { data, error } = await supabase
-  .from('content_records')
-  .select('kind,id,payload,published')
-  .eq('published', true);
+let data;
+try {
+  const result = await supabase
+    .from('content_records')
+    .select('kind,id,payload,published')
+    .eq('published', true);
 
-if (error) throw error;
+  if (result.error) throw result.error;
+  data = result.data;
+} catch (error) {
+  // Builds should not require the production database to be reachable. Keep
+  // the last committed sitemap when the request itself cannot reach Supabase;
+  // schema, authentication, and query errors still fail the build.
+  const message = String(error?.message || error);
+  const isNetworkError = error instanceof TypeError || /fetch failed|network|timeout|econn|enotfound|eai_again/i.test(message);
+  if (!isNetworkError) throw error;
+
+  if (!fs.existsSync('public/sitemap.xml')) throw error;
+  console.warn(`Supabase is unreachable; keeping the existing public/sitemap.xml. ${message}`);
+  process.exit(0);
+}
 
 const urls = [
   '/',
