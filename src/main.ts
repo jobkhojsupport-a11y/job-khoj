@@ -284,6 +284,9 @@ class JobKhojApp {
       this.renderResultsView();
     } else if (hash === 'admit-cards') {
       this.renderAdmitCardsView();
+    } else if (hash.startsWith('admit-card/')) {
+      const slugOrId = decodeURIComponent(hash.slice('admit-card/'.length));
+      this.renderAdmitCardDetailView(slugOrId);
     } else if (hash === 'blog') {
       this.renderBlogView();
     } else if (hash.startsWith('article/')) {
@@ -330,6 +333,7 @@ class JobKhojApp {
     let noindex=false;
     if(route.startsWith('search')) noindex=true;
     if(route.startsWith('job/')){ const key=decodeURIComponent(route.slice(4)); const j=JobKhojDataStore.getJobs().find(x=>x.slug===key||x.id===key); if(j){ document.title=`${j.title} | ${f.seoSiteTitle}`; description=`${j.title} — ${j.org}. Vacancy: ${j.vacancies}. Qualification: ${j.qualification}. Last date: ${j.lastDate}.`; } else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; } }
+    else if(route.startsWith('admit-card/')){ const key=decodeURIComponent(route.slice(11)); const c=JobKhojDataStore.getAdmitCards().find(x=>x.published&&(x.slug===key||x.id===key||this.admitCardSlug(x)===key)); if(c){ document.title=`${c.examName} Admit Card | ${f.seoSiteTitle}`; description=`${c.examName} admit card from ${c.org}. Release date: ${c.releaseDate}. Exam date: ${c.examDate}.`; } else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; } }
     else if(route.startsWith('article/')){ const key=decodeURIComponent(route.slice(8)); const a=JobKhojDataStore.getBlog().find(x=>x.slug===key||x.id===key); if(a){ document.title=a.seoTitle||`${a.title} | ${f.seoSiteTitle}`; description=a.seoDescription||a.excerpt||f.seoSiteDescription; } else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; } }
     else if(titles[route]) document.title=titles[route];
     else { document.title=`Page Not Found | ${f.seoSiteTitle}`; noindex=true; }
@@ -1911,7 +1915,7 @@ class JobKhojApp {
               <div class="job-card-header">
                 <div>
                   <span class="job-category-badge badge-railway">HALL TICKET</span>
-                  <h3 class="job-card-title">${this.escapeHtml(c.examName || '')}</h3>
+                  <h3 class="job-card-title"><a href="/admit-card/${encodeURIComponent(this.admitCardSlug(c))}">${this.escapeHtml(c.examName || '')}</a></h3>
                   <div class="job-card-org">${this.escapeHtml(c.org || '')}</div>
                 </div>
                 <span class="job-status-badge status-active">AVAILABLE</span>
@@ -1932,6 +1936,7 @@ class JobKhojApp {
 
               <div class="job-card-footer">
                 <span>Carry valid original Govt ID (Aadhaar/PAN/Voter ID) to the examination center.</span>
+                <a href="/admit-card/${encodeURIComponent(this.admitCardSlug(c))}" class="btn-view-details">VIEW DETAILS</a>
                 <a href="${this.escapeHtml(c.downloadUrl || "")}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">
                   DOWNLOAD ADMIT CARD ↗
                 </a>
@@ -1947,6 +1952,40 @@ class JobKhojApp {
         </div>
       </div>
     `;
+  }
+
+  private admitCardSlug(card: AdmitCardItem): string {
+    const base = String(card.slug || card.examName || 'admit-card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'admit-card';
+    return card.slug ? base : `${base}-${String(card.id).slice(0, 8)}`;
+  }
+
+  private renderAdmitCardDetailView(slugOrId: string): void {
+    const main = document.getElementById('app-main-content');
+    if (!main) return;
+    const card = JobKhojDataStore.getAdmitCards().find(c => c.published && (c.slug === slugOrId || c.id === slugOrId || this.admitCardSlug(c) === slugOrId));
+    if (!card) {
+      main.innerHTML = `<div class="container section-padding"><div class="empty-state-box"><h1 class="empty-state-title">Admit card not found</h1><p class="empty-state-sub">This notice may have been removed or its link may be incorrect.</p><a href="/admit-cards" class="btn-view-details">Browse Admit Cards</a></div></div>`;
+      return;
+    }
+    const url = `${location.origin}/admit-card/${encodeURIComponent(this.admitCardSlug(card))}`;
+    const shareText = `${card.examName} Admit Card`;
+    document.title = `${shareText} | Job Khoj`;
+    const setMeta = (selector: string, attribute: string, key: string, value: string) => {
+      let meta = document.head.querySelector(selector) as HTMLMetaElement | null;
+      if (!meta) { meta = document.createElement('meta'); meta.setAttribute(attribute, key); document.head.appendChild(meta); }
+      meta.content = value;
+    };
+    setMeta('meta[property="og:title"]', 'property', 'og:title', shareText);
+    setMeta('meta[property="og:description"]', 'property', 'og:description', `${card.org} · Release: ${card.releaseDate} · Exam: ${card.examDate}`);
+    setMeta('meta[property="og:url"]', 'property', 'og:url', url);
+    main.innerHTML = `<div class="container section-padding"><nav class="breadcrumb-nav"><a href="/">Home</a><span class="breadcrumb-separator">›</span><a href="/admit-cards">Admit Cards</a><span class="breadcrumb-separator">›</span><span>${this.escapeHtml(card.examName)}</span></nav><article class="job-detail-card"><span class="job-category-badge badge-railway">ADMIT CARD</span><h1 class="detail-job-title">${this.escapeHtml(card.examName)}</h1><p class="job-card-org">${this.escapeHtml(card.org)}</p><div class="job-meta-grid" style="grid-template-columns:repeat(2,1fr);"><div class="job-meta-item"><span class="job-meta-label">Release Date</span><span class="job-meta-val">${this.escapeHtml(card.releaseDate || 'To be announced')}</span></div><div class="job-meta-item"><span class="job-meta-label">Exam Date</span><span class="job-meta-val">${this.escapeHtml(card.examDate || 'To be announced')}</span></div></div><div class="detail-text-content"><p>${this.escapeHtml(card.description || '')}</p></div><div class="important-links-box"><a href="${this.escapeHtml(card.downloadUrl || '')}" target="_blank" rel="noopener noreferrer" class="btn-apply-now">DOWNLOAD ADMIT CARD</a>${card.officialWebsite ? `<a href="${this.escapeHtml(card.officialWebsite)}" target="_blank" rel="noopener noreferrer" class="btn-view-details">OFFICIAL WEBSITE</a>` : ''}<button type="button" class="btn-view-details" id="share-admit-card">SHARE THIS NOTICE</button></div></article></div>`;
+    document.getElementById('share-admit-card')?.addEventListener('click', async () => {
+      try {
+        if (navigator.share) await navigator.share({ title: shareText, text: `${card.examName} · ${card.org}`, url });
+        else if (navigator.clipboard) { await navigator.clipboard.writeText(url); this.showToast('Admit card link copied'); }
+        else { window.prompt('Copy this admit card link:', url); }
+      } catch (error) { if (!(error instanceof DOMException && error.name === 'AbortError')) this.showToast('Could not share the link', false); }
+    });
   }
 
   // =========================================================================

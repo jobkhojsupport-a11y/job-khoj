@@ -13,7 +13,7 @@ export interface JobItem {
 }
 export interface ExamItem { id:string; examName:string; org:string; examDate:string; lastDate:string; details:string; eligibility:string; officialUrl:string; published:boolean; }
 export interface ResultItem { id:string; resultTitle:string; exam:string; org:string; resultDate:string; description:string; resultUrl:string; officialWebsite:string; published:boolean; featured:boolean; }
-export interface AdmitCardItem { id:string; examName:string; org:string; releaseDate:string; examDate:string; downloadUrl:string; officialWebsite:string; description:string; published:boolean; }
+export interface AdmitCardItem { id:string; slug?:string; examName:string; org:string; releaseDate:string; examDate:string; downloadUrl:string; officialWebsite:string; description:string; published:boolean; }
 export interface BlogItem { id:string; title:string; slug:string; category:string; featuredImage:string; excerpt:string; content:string; author:string; publishedDate:string; seoTitle:string; seoDescription:string; keywords:string; published:boolean; }
 export interface AdSlot { id:string; title:string; locationName:string; htmlContent:string; enabled:boolean; }
 export interface SiteSettings { whatsappNumber:string; whatsappChannelUrl:string; telegramChannelUrl:string; defaultSupportMsg:string; whatsappApplyMsgTemplate:string; enableWhatsappApplyGlobal:boolean; enableHeaderWhatsappBtn:boolean; siteTagline:string; supportEmail:string; footerAboutText:string;  }
@@ -137,9 +137,9 @@ export class JobKhojDataStore {
      if(x.appStartISO && x.lastDateISO && x.appStartISO>x.lastDateISO) throw new Error('Application start date cannot be after the last date.');
    }
    const current=this.getCollection(kind).find((v:any)=>String(v.id)===String(x.id));
-   if(kind==='jobs'||kind==='blog'){
+   if(kind==='jobs'||kind==='blog'||kind==='admit_cards'){
      const existingSlugs=new Set(this.getCollection(kind).filter((v:any)=>String(v.id)!==String(x.id)).map((v:any)=>String(v.slug||'').toLowerCase()).filter(Boolean));
-     const base=String(x.slug||x.title||'item').toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'')||'item'; let slug=base,n=2; while(existingSlugs.has(slug.toLowerCase())) slug=`${base}-${n++}`; x.slug=slug;
+     const base=String(x.slug||x.title||x.examName||'admit-card').toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'')||'admit-card'; let slug=base,n=2; while(existingSlugs.has(slug.toLowerCase())) slug=`${base}-${n++}`; x.slug=slug;
    }
    const row={kind,id:String(x.id||crypto.randomUUID()),payload:x,published:Boolean(x.published),updated_at:new Date().toISOString()};
    let result=await supabase.from('content_records').upsert(row,{onConflict:'kind,id'});

@@ -54,6 +54,7 @@ for (const row of data || []) {
   const key = slug || id;
   if (row.kind === 'jobs') urls.push(`/job/${encodeURIComponent(key)}`);
   if (row.kind === 'blog') urls.push(`/article/${encodeURIComponent(key)}`);
+  if (row.kind === 'admit_cards') urls.push(`/admit-card/${encodeURIComponent(payload.slug || `${String(payload.examName || 'admit-card').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${id.slice(0, 8)}`)}`);
 }
 
 const uniqueUrls = [...new Set(urls)];

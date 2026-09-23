@@ -25,16 +25,18 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
   const key = (env.SUPABASE_PUBLISHABLE_KEY || '').trim();
   if (supabaseUrl && key) {
     const headers = { apikey: key, Authorization: `Bearer ${key}` };
-    for (const kind of ['jobs', 'blog']) {
-      const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/content_records?select=payload,updated_at&kind=eq.${kind}&published=eq.true`;
+    for (const kind of ['jobs', 'blog', 'admit_cards']) {
+      const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/content_records?select=id,payload,updated_at&kind=eq.${kind}&published=eq.true`;
       const response = await fetch(endpoint, { headers });
       if (response.ok) {
-        const rows = await response.json() as Array<{ payload?: { slug?: string }; updated_at?: string }>;
+        const rows = await response.json() as Array<{ id?: string; payload?: { slug?: string; examName?: string }; updated_at?: string }>;
         for (const row of rows) {
           const slug = row?.payload?.slug;
-          if (!slug) continue;
+          const id = row.id;
+          const key = slug || (kind === 'admit_cards' ? `${String(row?.payload?.examName || 'admit-card').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${String(id || '').slice(0, 8)}` : '');
+          if (!key) continue;
           urls.push({
-            loc: `${base}/${kind === 'jobs' ? 'job' : 'article'}/${encodeURIComponent(slug)}`,
+            loc: `${base}/${kind === 'jobs' ? 'job' : kind === 'blog' ? 'article' : 'admit-card'}/${encodeURIComponent(key)}`,
             lastmod: row.updated_at || undefined
           });
         }
