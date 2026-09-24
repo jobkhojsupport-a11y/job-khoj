@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
+import type { JobCategory } from './job-categories';
 
-export type JobCategory = 'Government'|'Private'|'Bank'|'Railway'|'Teaching'|'Defence'|'Police'|'Apprentice';
+export type { JobCategory } from './job-categories';
 export type JobType = 'Permanent'|'Contractual'|'Apprentice'|'Full Time';
 
 export interface JobItem {

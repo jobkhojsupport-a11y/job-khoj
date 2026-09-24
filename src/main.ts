@@ -3,6 +3,7 @@
 
 import { Icons } from './icons.ts';
 import { supabase } from './supabase.ts';
+import { JOB_CATEGORIES, normalizeJobCategory } from './job-categories.ts';
 import {
   JobKhojDataStore,
   JobItem,
@@ -2776,7 +2777,7 @@ class JobKhojApp {
               <div class="admin-form-group">
                 <label class="admin-form-label">Category *</label>
                 <select id="m-category" class="admin-form-select">
-                  ${['Government', 'Private', 'Bank', 'Railway', 'Teaching', 'Defence', 'Police', 'Apprentice'].map(c => `
+                  ${JOB_CATEGORIES.map(c => `
                     <option value="${c}" ${existing?.category === c ? 'selected' : ''}>${c} Jobs</option>
                   `).join('')}
                 </select>
@@ -3566,19 +3567,6 @@ class JobKhojApp {
       if (cell.length || row.length) { row.push(cell.trim()); if (row.some(v => v !== '')) rows.push(row); }
       return rows;
     };
-    const normaliseCategory = (value: string): JobItem['category'] | null => {
-      const v = value.trim().toLowerCase();
-      if (!v) return 'Government';
-      if (v === 'government' || v.includes('govt') || v.includes('government') || v.includes('upsc') || v.includes('ssc')) return 'Government';
-      if (v.includes('bank') || v.includes('insurance') || v.includes('financial')) return 'Bank';
-      if (v.includes('rail')) return 'Railway';
-      if (v.includes('teach')) return 'Teaching';
-      if (v.includes('defence') || v.includes('defense') || v.includes('navy') || v.includes('army')) return 'Defence';
-      if (v.includes('police')) return 'Police';
-      if (v.includes('apprent')) return 'Apprentice';
-      if (v.includes('private')) return 'Private';
-      return null;
-    };
     document.getElementById('csv-import-input')?.addEventListener('change',(ev)=>{ if(!JobKhojDataStore.canWrite()){this.showToast('Editor permission required',false);return;}
       const input = ev.target as HTMLInputElement;
       const file = input.files?.[0];
@@ -3612,7 +3600,7 @@ class JobKhojApp {
               if(!/^\d+$/.test(get('vacancy')))throw new Error('vacancy must be a non-negative whole number');
               const start=validDate(get('start_date'),'start_date'),last=validDate(get('last_date'),'last_date'),exam=validDate(get('exam_date'),'exam_date');if(start&&last&&start>last)throw new Error('start_date cannot be after last_date');
               const apply=validUrl(get('apply_url'),'apply_url'),notification=validUrl(get('notification_url'),'notification_url'),official=validUrl(get('official_url'),'official_url');
-              const category=normaliseCategory(get('category'));if(!category)throw new Error('category is not recognized');
+              const category=normalizeJobCategory(get('category'));if(!category)throw new Error('category is not recognized');
               const jt=get('job_type').toLowerCase();if(jt&&!['permanent','contractual','apprentice','full time','full-time'].includes(jt))throw new Error('job_type must be Permanent, Contractual, Apprentice or Full Time');
               const rawStatus=get('status').toLowerCase();if(!['published','open','active','live','yes','draft','unpublished','no','false','0'].includes(rawStatus))throw new Error('status must be published or draft');
               const published=['published','open','active','live','yes'].includes(rawStatus), key=normalizedKey(title,org), prior=existingByKey.get(key), duplicateInFile=keysInFile.has(key);keysInFile.add(key);
