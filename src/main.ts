@@ -3480,7 +3480,7 @@ class JobKhojApp {
         </div>
         <div class="stat-metric-card" style="margin-bottom:20px;">
           <h3 class="admin-heading" style="font-size:18px;">CSV Job Import / Export</h3>
-          <p class="admin-subheading">Bulk add jobs from Excel/Google Sheets. CSV imports are validated, duplicate titles are skipped, and imported status/category values are normalised.</p>
+          <p class="admin-subheading">Use the downloaded template. Matching title and organization rows update the existing job while preserving its ID and URL slug.</p>
           <div class="flex items-center gap-3" style="flex-wrap:wrap;">
             <button class="btn-admin-action-primary" id="csv-template-btn">DOWNLOAD CSV TEMPLATE</button>
             <button class="btn-table-action" id="csv-export-btn">EXPORT ALL JOBS</button>
@@ -3539,18 +3539,21 @@ class JobKhojApp {
       </div>`;
 
     const download = (name:string, content:string, type:string) => { const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([content],{type})); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),500); };
-    const csvEscape=(v:any)=>{const s=String(v??''); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+    const csvEscape=(v:any)=>{let s=String(v??''); if (/^[\s]*[-*@]/.test(s)) s=`'${s}`; return /[",\r\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
     const csvHeaders=['title','organization','category','post','job_type','location','vacancy','qualification','age_limit','application_fee','start_date','last_date','exam_date','selection_process','salary','apply_url','notification_url','official_url','show_notification','show_website','show_apply','status','featured'];
     document.getElementById('csv-template-btn')?.addEventListener('click',()=>download('job-khoj-template.csv',csvHeaders.join(',')+'\n', 'text/csv'));
     document.getElementById('csv-export-btn')?.addEventListener('click',()=>{ const rows=jobs.map(j=>[j.title,j.org,j.category,j.post||'',j.jobType,j.location,j.vacancies,j.qualification,j.ageLimit,j.appFee,j.appStartDate,j.lastDate,j.examDate,j.selectionProcess,j.salary,j.applyUrl,j.officialNotifUrl,j.officialWebsiteUrl,j.showOfficialNotificationButton !== false?'yes':'no',j.showOfficialWebsiteButton !== false?'yes':'no',j.showApplyButton !== false?'yes':'no',j.published?'published':'draft',j.featured?'yes':'no']); download('job-khoj-jobs.csv',[csvHeaders.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n'),'text/csv'); });
-    const parseCSV = (text: string): string[][] => {
+    const parseCSV = (source: string): string[][] => {
+      const text=source.replace(/^\uFEFF/,'');
       const rows: string[][] = [];
       let row: string[] = [], cell = '', quoted = false;
       for (let i = 0; i < text.length; i++) {
         const ch = text[i], next = text[i + 1];
         if (ch === '"') {
           if (quoted && next === '"') { cell += '"'; i++; }
-          else { quoted = !quoted; }
+          else if (!quoted && cell.length===0) { quoted = true; }
+          else if (quoted) { quoted = false; }
+          else throw new Error(`Unexpected quote near character ${i+1}`);
         } else if (ch === ',' && !quoted) { row.push(cell.trim()); cell = ''; }
         else if ((ch === '\n' || ch === '\r') && !quoted) {
           if (ch === '\r' && next === '\n') i++;
@@ -3559,6 +3562,7 @@ class JobKhojApp {
           row = [];
         } else { cell += ch; }
       }
+      if(quoted) throw new Error('Unclosed quoted field');
       if (cell.length || row.length) { row.push(cell.trim()); if (row.some(v => v !== '')) rows.push(row); }
       return rows;
     };
@@ -3582,63 +3586,46 @@ class JobKhojApp {
       const reader = new FileReader();
       reader.onload = async () => {
         try {
-          const rows = parseCSV(String(reader.result || '').replace(/^\uFEFF/, ''));
+          const rows = parseCSV(String(reader.result || ''));
           if (rows.length < 2) { this.showToast('CSV has no job rows', false); return; }
-          const headers = rows[0].map(h => h.trim().toLowerCase());
-          const idx = (name:string) => headers.indexOf(name);
-          const required = ['title','organization','vacancy','qualification'];
-          const missing = required.filter(h => idx(h) < 0);
-          if (missing.length) { this.showToast(`Invalid CSV. Missing: ${missing.join(', ')}`, false); return; }
-          const imported: JobItem[] = [];
-          let invalidRows = 0;
+          const headers = rows[0].map(h => h.trim());
+          const headerProblem=headers.findIndex((h,i)=>h!==csvHeaders[i]);
+          if(headerProblem>=0 || headers.length!==csvHeaders.length){const expected=csvHeaders[headerProblem]||'(no extra column)',actual=headers[headerProblem]||'(missing)';throw new Error(`Header mismatch at column ${headerProblem+1}: expected "${expected}", found "${actual}". Download a fresh template.`);}
+          const idx = (name:string) => csvHeaders.indexOf(name);
+          const counts={total:rows.length-1,created:0,updated:0,duplicates:0,invalid:0,errors:0};
+          const issues:string[]=[];
+          const normalizedKey=(title:string,org:string)=>`${title.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim()}|${org.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim()}`;
+          const existingByKey=new Map(JobKhojDataStore.getJobs().map(j=>[normalizedKey(j.title,j.org),j]));
+          const keysInFile=new Set<string>();
+          const validDate=(value:string,label:string)=>{const v=value.trim();if(!v)return '';if(/^(not specified|n\/?a|unknown|-|none|null)$/i.test(v))throw new Error(`${label} must be empty or a valid YYYY-MM-DD date`);const m=v.match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)throw new Error(`${label} must use YYYY-MM-DD`);const y=+m[1],mo=+m[2],d=+m[3],dt=new Date(Date.UTC(y,mo-1,d));if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==mo-1||dt.getUTCDate()!==d)throw new Error(`${label} is not a real calendar date`);return v;};
+          const validUrl=(value:string,label:string)=>{let v=value.trim().replace(/^https\\:\/\//i,'https://');if(!v)return '';try{const u=new URL(v);if(!['http:','https:'].includes(u.protocol)||!u.hostname)throw new Error();return u.href;}catch{throw new Error(`${label} must be a valid HTTP or HTTPS URL`);}};
+          const parseBool=(value:string,label:string,defaultValue:boolean)=>{const v=value.trim().toLowerCase();if(!v)return defaultValue;if(['yes','true','1'].includes(v))return true;if(['no','false','0'].includes(v))return false;throw new Error(`${label} must be yes or no`);};
+          const escapeIssue=(s:string)=>s.replace(/[<>]/g,'');
           for (let i=1; i<rows.length; i++) {
             const vals = rows[i];
-            if(vals.length !== rows[0].length){ invalidRows++; continue; }
-            const get = (n:string) => { const nidx=idx(n); return nidx >= 0 ? (vals[nidx] || '') : ''; };
-            const parseDate=(v:string):number=>{
-              if(!v.trim()) return NaN;
-              const value=v.trim();
-              const m=value.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-              if(m){
-                const day=Number(m[1]), month=Number(m[2]), year=Number(m[3]);
-                const d=new Date(Date.UTC(year, month-1, day));
-                return d.getUTCFullYear()===year && d.getUTCMonth()===month-1 && d.getUTCDate()===day ? d.getTime() : NaN;
-              }
-              const d=new Date(value);
-              return Number.isNaN(d.getTime()) ? NaN : d.getTime();
-            };
-            const validDate=(v:string)=>!v.trim() || !Number.isNaN(parseDate(v));
-            const validUrl=(v:string)=>!v || /^https:\/\//i.test(v);
-            const title=get('title').trim(), org=get('organization').trim();
-            if (!title || !org || !validDate(get('start_date')) || !validDate(get('last_date')) || !validUrl(get('apply_url')) || !validUrl(get('notification_url')) || !validUrl(get('official_url'))) { invalidRows++; continue; }
-            const startDate=parseDate(get('start_date'));
-            const endDate=parseDate(get('last_date'));
-            if(!Number.isNaN(startDate)&&!Number.isNaN(endDate)&&startDate>endDate){invalidRows++;continue;}
-            const category=normaliseCategory(get('category'));
-            if (!category) { invalidRows++; continue; }
-            const baseSlug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || `job-${crypto.randomUUID()}`;
-            const rawStatus=get('status').toLowerCase();
-            const published = ['published','open','active','live','yes'].includes(rawStatus);
-            const jobStatus: JobItem['status'] = rawStatus.includes('expired') ? 'Expired' : (rawStatus.includes('closing') ? 'Closing Soon' : 'Active');
-            imported.push({
-              id:crypto.randomUUID(), title, org, post:get('post'), category, jobType:(['permanent','contractual','apprentice','full time','full-time'].includes(get('job_type').toLowerCase()) ? (get('job_type').toLowerCase().includes('contract')?'Contractual':get('job_type').toLowerCase().includes('apprent')?'Apprentice':get('job_type').toLowerCase().includes('full')?'Full Time':'Permanent') : 'Permanent'), vacancies:get('vacancy')||'Various Posts',
-              qualification:get('qualification'), location:get('location')||'All India', salary:get('salary')||'As per norms', ageLimit:get('age_limit')||'As per rules',
-              appStartDate:get('start_date'), lastDate:get('last_date'), examDate:get('exam_date')||'To be announced',
-              appFee:get('application_fee')||'Refer notification', selectionProcess:get('selection_process')||'Written Exam & Document Verification',
-              documentsRequired:[], jobDesc:'', howToApply:'', officialNotifUrl:get('notification_url'), officialWebsiteUrl:get('official_url'),
-              applyUrl:get('apply_url'), showOfficialNotificationButton:!['no','false','0'].includes(get('show_notification').toLowerCase()), showOfficialWebsiteButton:!['no','false','0'].includes(get('show_website').toLowerCase()), showApplyButton:!['no','false','0'].includes(get('show_apply').toLowerCase()), whatsappApplyEnabled:true, featured:['yes','true','1'].includes(get('featured').toLowerCase()),
-              published, slug:baseSlug, postedDate:new Date().toLocaleDateString('en-IN'), status:jobStatus
-            });
+            const rowNo=i+1, titleHint=String(vals[0]||'').trim()||'(untitled)';
+            if(vals.length!==csvHeaders.length){counts.invalid++;issues.push(`Row ${rowNo} — ${titleHint}: expected ${csvHeaders.length} columns, found ${vals.length}`);continue;}
+            const get=(n:string)=>(vals[idx(n)]||'').trim();
+            try{
+              const title=get('title'),org=get('organization');if(!title||!org||!get('vacancy')||!get('qualification'))throw new Error('title, organization, vacancy and qualification are required');
+              for(const [field,value] of Object.entries({title,organization:org,post:get('post'),qualification:get('qualification'),location:get('location'),salary:get('salary'),age_limit:get('age_limit'),selection_process:get('selection_process')}))if(value.length>5000)throw new Error(`${field} exceeds 5000 characters`);
+              if(!/^\d+$/.test(get('vacancy')))throw new Error('vacancy must be a non-negative whole number');
+              const start=validDate(get('start_date'),'start_date'),last=validDate(get('last_date'),'last_date'),exam=validDate(get('exam_date'),'exam_date');if(start&&last&&start>last)throw new Error('start_date cannot be after last_date');
+              const apply=validUrl(get('apply_url'),'apply_url'),notification=validUrl(get('notification_url'),'notification_url'),official=validUrl(get('official_url'),'official_url');
+              const category=normaliseCategory(get('category'));if(!category)throw new Error('category is not recognized');
+              const jt=get('job_type').toLowerCase();if(jt&&!['permanent','contractual','apprentice','full time','full-time'].includes(jt))throw new Error('job_type must be Permanent, Contractual, Apprentice or Full Time');
+              const rawStatus=get('status').toLowerCase();if(!['published','open','active','live','yes','draft','unpublished','no','false','0'].includes(rawStatus))throw new Error('status must be published or draft');
+              const published=['published','open','active','live','yes'].includes(rawStatus), key=normalizedKey(title,org), prior=existingByKey.get(key), duplicateInFile=keysInFile.has(key);keysInFile.add(key);
+              const jobStatus:JobItem['status']=last&&last<new Date().toISOString().slice(0,10)?'Expired':'Active';
+              const job:JobItem={id:prior?.id||crypto.randomUUID(),title,org,post:get('post'),category,jobType:jt.includes('contract')?'Contractual':jt.includes('apprent')?'Apprentice':jt.includes('full')?'Full Time':'Permanent',vacancies:get('vacancy'),qualification:get('qualification'),location:get('location')||'All India',salary:get('salary'),ageLimit:get('age_limit'),appStartDate:start,lastDate:last,examDate:exam,appFee:get('application_fee'),selectionProcess:get('selection_process'),documentsRequired:prior?.documentsRequired||[],jobDesc:prior?.jobDesc||'',howToApply:prior?.howToApply||'',officialNotifUrl:notification,officialWebsiteUrl:official,applyUrl:apply,showOfficialNotificationButton:parseBool(get('show_notification'),'show_notification',true),showOfficialWebsiteButton:parseBool(get('show_website'),'show_website',true),showApplyButton:parseBool(get('show_apply'),'show_apply',true),whatsappApplyEnabled:prior?.whatsappApplyEnabled??true,featured:parseBool(get('featured'),'featured',false),published,slug:prior?.slug||title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'')||`job-${crypto.randomUUID()}`,postedDate:prior?.postedDate||new Date().toISOString().slice(0,10),status:jobStatus};
+              try{await JobKhojDataStore.saveJob(job);existingByKey.set(key,job);if(prior)counts.updated++;else counts.created++;if(duplicateInFile)counts.duplicates++;}
+              catch(error){counts.errors++;issues.push(`Row ${rowNo} — ${title}: database save failed: ${escapeIssue(error instanceof Error?error.message:String(error))}`);}
+            }catch(error){counts.invalid++;issues.push(`Row ${rowNo} — ${titleHint}: ${escapeIssue(error instanceof Error?error.message:String(error))}`);}
           }
-          const existing=JobKhojDataStore.getJobs();
-          const seen=new Set(existing.map(j=>(j.title.trim().toLowerCase()+'|'+j.org.trim().toLowerCase())));
-          const fresh: JobItem[] = [];
-          for (const job of imported) { const key=job.title.trim().toLowerCase()+'|'+job.org.trim().toLowerCase(); if(seen.has(key)) continue; seen.add(key); fresh.push(job); }
-          for (const job of fresh) await JobKhojDataStore.saveJob(job);
-          document.getElementById('csv-preview')!.textContent=`Imported ${fresh.length} new jobs; skipped ${imported.length-fresh.length} duplicates${invalidRows ? `; ${invalidRows} invalid rows skipped` : ''}.`;
-          this.showToast(`Imported ${fresh.length} jobs`);
-          this.renderAdminTools(container);
-        } catch (error) { console.error(error); this.showToast('Could not read CSV. Please use the downloaded template.', false); }
+          const report=`CSV Import Complete\nTotal rows: ${counts.total}\nNew jobs: ${counts.created}\nUpdated jobs: ${counts.updated}\nSkipped duplicates: ${counts.duplicates}\nInvalid rows: ${counts.invalid}\nDatabase errors: ${counts.errors}${issues.length?`\n\n${issues.join('\n')}`:''}`;
+          const preview=document.getElementById('csv-preview');if(preview){preview.textContent=report;preview.style.whiteSpace='pre-wrap';preview.style.color=counts.invalid||counts.errors?'#b45309':'#15803d';}
+          this.showToast(`CSV processed: ${counts.created} new, ${counts.updated} updated, ${counts.invalid+counts.errors} failed`,counts.invalid+counts.errors===0);
+        } catch (error) { console.error('CSV import failed',error); this.showToast(error instanceof Error?error.message:'Could not read CSV file.', false); }
       };
       reader.readAsText(file);
       input.value='';
