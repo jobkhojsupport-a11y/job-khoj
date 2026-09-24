@@ -3565,8 +3565,8 @@ class JobKhojApp {
     const normaliseCategory = (value: string): JobItem['category'] | null => {
       const v = value.trim().toLowerCase();
       if (!v) return 'Government';
-      if (v === 'government' || v.includes('govt') || v.includes('government')) return 'Government';
-      if (v.includes('bank')) return 'Bank';
+      if (v === 'government' || v.includes('govt') || v.includes('government') || v.includes('upsc') || v.includes('ssc')) return 'Government';
+      if (v.includes('bank') || v.includes('insurance') || v.includes('financial')) return 'Bank';
       if (v.includes('rail')) return 'Railway';
       if (v.includes('teach')) return 'Teaching';
       if (v.includes('defence') || v.includes('defense') || v.includes('navy') || v.includes('army')) return 'Defence';
@@ -3595,25 +3595,24 @@ class JobKhojApp {
             const vals = rows[i];
             if(vals.length !== rows[0].length){ invalidRows++; continue; }
             const get = (n:string) => { const nidx=idx(n); return nidx >= 0 ? (vals[nidx] || '') : ''; };
-            const validDate=(v:string)=>{
-              if(!v) return true;
+            const parseDate=(v:string):number=>{
+              if(!v.trim()) return NaN;
               const value=v.trim();
               const m=value.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
               if(m){
                 const day=Number(m[1]), month=Number(m[2]), year=Number(m[3]);
                 const d=new Date(Date.UTC(year, month-1, day));
-                return d.getUTCFullYear()===year && d.getUTCMonth()===month-1 && d.getUTCDate()===day;
+                return d.getUTCFullYear()===year && d.getUTCMonth()===month-1 && d.getUTCDate()===day ? d.getTime() : NaN;
               }
               const d=new Date(value);
-              return !Number.isNaN(d.getTime());
+              return Number.isNaN(d.getTime()) ? NaN : d.getTime();
             };
+            const validDate=(v:string)=>!v.trim() || !Number.isNaN(parseDate(v));
             const validUrl=(v:string)=>!v || /^https:\/\//i.test(v);
             const title=get('title').trim(), org=get('organization').trim();
-            if (!title || !org || !validDate(get('start_date')) || !validDate(get('last_date')) || !validDate(get('exam_date')) || !validUrl(get('apply_url')) || !validUrl(get('notification_url')) || !validUrl(get('official_url'))) { invalidRows++; continue; }
-            const startValue=get('start_date').trim();
-            const endValue=get('last_date').trim();
-            const startDate=startValue ? new Date(startValue).getTime() : NaN;
-            const endDate=endValue ? new Date(endValue).getTime() : NaN;
+            if (!title || !org || !validDate(get('start_date')) || !validDate(get('last_date')) || !validUrl(get('apply_url')) || !validUrl(get('notification_url')) || !validUrl(get('official_url'))) { invalidRows++; continue; }
+            const startDate=parseDate(get('start_date'));
+            const endDate=parseDate(get('last_date'));
             if(!Number.isNaN(startDate)&&!Number.isNaN(endDate)&&startDate>endDate){invalidRows++;continue;}
             const category=normaliseCategory(get('category'));
             if (!category) { invalidRows++; continue; }
