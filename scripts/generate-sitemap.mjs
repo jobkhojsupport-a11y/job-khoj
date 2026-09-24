@@ -17,9 +17,15 @@ const SUPABASE_KEY =
 const SITE_URL = 'https://jobkhoj.in';
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error(
-    'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY.'
+  if (!fs.existsSync('public/sitemap.xml')) {
+    throw new Error(
+      'Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY, and no existing public/sitemap.xml is available.'
+    );
+  }
+  console.warn(
+    'Supabase build variables are missing; keeping the existing public/sitemap.xml. Configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Cloudflare Pages to generate an up-to-date sitemap.'
   );
+  process.exit(0);
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
